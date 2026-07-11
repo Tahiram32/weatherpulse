@@ -110,6 +110,7 @@ async function runOrchestrator() {
       totalClients: clients.length,
       processedClients: 0,
       successfulClients: 0,
+      failedClients: 0,
       logs: [
         {
           timestamp: new Date().toLocaleTimeString(),
@@ -166,10 +167,18 @@ async function runOrchestrator() {
     await addLog("info", `Prepared mutation queue. Invoking ${mutationQueue.length} isolated tenant worker endpoints sequentially...`);
 
     // F. Execute isolated HTTP webhooks sequentially to avoid overloading the Cloud Run CPU or exceeding API rate-limits
+    const throttleMs = Number(process.env.WEATHER_SYNC_THROTTLE_MS) || 14000;
+    
     for (let i = 0; i < mutationQueue.length; i++) {
       const { client, weather } = mutationQueue[i];
       const domain = client.domain;
       
+      // Throttle spacing before next request (except the first one)
+      if (i > 0 && throttleMs > 0) {
+        await addLog("info", `Throttling rate-limits. Waiting ${throttleMs / 1000}s before triggering next webhook...`);
+        await new Promise(resolve => setTimeout(resolve, throttleMs));
+      }
+
       await addLog("info", `[${i + 1}/${mutationQueue.length}] Triggering webhook worker for: ${domain} (City: ${client.city} | ${weather.temp}°F)`);
 
       try {
@@ -197,14 +206,15 @@ async function runOrchestrator() {
       } catch (err: any) {
         await addLog("error", `[Worker Failed] Failed to process mutation for ${domain}: ${err.message}`);
         
-        // Manually update processed counter if the endpoint fails so the progress bar doesn't hang forever
+        // Manually update processed counter and failed counter if the endpoint fails so tracking is accurate
         try {
           const docSnap = await runLogRef.get();
           if (docSnap.exists) {
             const runData = docSnap.data() as any;
             runData.processedClients = (runData.processedClients || 0) + 1;
+            runData.failedClients = (runData.failedClients || 0) + 1;
             if (runData.processedClients >= runData.totalClients) {
-              runData.status = runData.successfulClients > 0 ? "completed" : "failed";
+              runData.status = "failed";
               runData.completedAt = new Date().toISOString();
             }
             await runLogRef.set(runData);
@@ -213,13 +223,29 @@ async function runOrchestrator() {
           console.error("Failed to update execution counter:", updateErr.message);
         }
       }
-
-      // Small jitter/spacing to keep rates healthy
-      await new Promise(resolve => setTimeout(resolve, 800));
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    await addLog("success", `🎉 GitHub Actions Meteorological Sync Orchestration successfully complete in ${elapsed}s!`);
+    
+    // Check if there were any failures to enforce CI/CD integrity
+    const finalSnap = await runLogRef.get();
+    const finalData = finalSnap.exists ? finalSnap.data() : null;
+    const totalFailed = finalData ? (finalData.failedClients || 0) : 0;
+    
+    if (totalFailed > 0) {
+      await addLog("error", `❌ GitHub Actions Meteorological Sync Orchestration completed with ${totalFailed} client failure(s).`);
+      await runLogRef.set({
+        status: "failed",
+        completedAt: new Date().toISOString()
+      }, { merge: true });
+      process.exit(1);
+    } else {
+      await addLog("success", `🎉 GitHub Actions Meteorological Sync Orchestration successfully complete in ${elapsed}s!`);
+      await runLogRef.set({
+        status: "completed",
+        completedAt: new Date().toISOString()
+      }, { merge: true });
+    }
 
   } catch (fatalErr: any) {
     console.error("❌ Fatal Orchestrator Error:", fatalErr.message);

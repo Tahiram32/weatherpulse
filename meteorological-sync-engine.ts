@@ -85,6 +85,47 @@ const ai = new GoogleGenAI({
   },
 });
 
+/**
+ * Robust wrapper around Gemini generateContent with automatic retry on 429 / RESOURCE_EXHAUSTED errors.
+ * Implements exponential backoff with random jitter.
+ */
+async function generateContentWithRetry(aiClient: any, params: any, maxRetries = 5, initialDelayMs = 12000): Promise<any> {
+  let attempt = 0;
+  let delay = initialDelayMs;
+  while (true) {
+    try {
+      return await aiClient.models.generateContent(params);
+    } catch (err: any) {
+      attempt++;
+      const errStr = JSON.stringify(err).toLowerCase();
+      const errMsg = (err?.message || "").toLowerCase();
+      const errStatus = (err?.status || "").toLowerCase();
+      const isRateLimit = 
+        errMsg.includes("429") || 
+        errMsg.includes("resource_exhausted") || 
+        errMsg.includes("quota") ||
+        errMsg.includes("rate") ||
+        errStr.includes("429") ||
+        errStr.includes("resource_exhausted") ||
+        errStr.includes("quota") ||
+        err?.statusCode === 429 ||
+        err?.code === 429 ||
+        err?.error?.code === 429 ||
+        err?.error?.status === "RESOURCE_EXHAUSTED";
+        
+      if (isRateLimit && attempt <= maxRetries) {
+        const jitter = Math.random() * 2000; // 0 to 2 seconds of random jitter
+        const currentDelay = delay + jitter;
+        console.warn(`⚠️ [GEMINI-RATE-LIMIT] 429 Quota Exceeded. Attempt ${attempt}/${maxRetries}. Retrying in ${(currentDelay / 1000).toFixed(2)}s...`);
+        await sleep(currentDelay);
+        delay *= 2.0; // Exponential backoff
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
 // Weather Copy Schema definition
 const weatherCopySchema = {
   type: Type.OBJECT,
@@ -394,7 +435,7 @@ export async function enqueueCloudTask(payload: { domain: string, weather: any, 
  * guaranteeing instantaneous HTTP returns and eliminating Cloud Run timeouts.
  */
 function simulateAsyncTaskExecution(payload: { domain: string, weather: any, runLogRefId: string }, index: number) {
-  const staggerMs = index * 350;
+  const staggerMs = index * 14000;
   setTimeout(async () => {
     try {
       console.log(`[SIM-TASK-QUEUE] Launching background worker for ${payload.domain}...`);
@@ -571,12 +612,18 @@ export async function executeMeteorologicalSync(options?: { queueMode?: "simulat
     }
 
     // 4. LEGACY MONOLITHIC MONITORED LOOP (If specifically chosen)
-    const CONCURRENCY_LIMIT = 4;
-    await addLog("info", `Spawning sliding window task executor with concurrency limit of ${CONCURRENCY_LIMIT}...`);
+    const CONCURRENCY_LIMIT = Number(process.env.WEATHER_SYNC_CONCURRENCY) || 1;
+    const THROTTLE_MS = Number(process.env.WEATHER_SYNC_THROTTLE_MS) || 14000;
+    await addLog("info", `Spawning monolithic task executor with concurrency limit of ${CONCURRENCY_LIMIT} and throttle spacing of ${THROTTLE_MS}ms...`);
 
     await processTasksWithLimit(mutationQueue, CONCURRENCY_LIMIT, async (task, index) => {
       const { client, weather } = task;
       const clientIndex = index + 1;
+      
+      if (index > 0 && THROTTLE_MS > 0) {
+        await addLog("info", `Throttling to respect rate limits. Waiting ${THROTTLE_MS / 1000} seconds before next mutation...`);
+        await sleep(THROTTLE_MS);
+      }
       
       await addLog("info", `[Queue ${clientIndex}/${runLog.totalClients}] Processing mutations for tenant: ${client.domain} (${client.city})...`);
 
@@ -593,11 +640,19 @@ export async function executeMeteorologicalSync(options?: { queueMode?: "simulat
     });
 
     const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(2);
-    runLog.status = "completed";
     runLog.completedAt = new Date().toISOString();
-    await runLogRef.set(runLog);
-    await addLog("success", `🎉 Monolithic Meteorological Sync Engine completed successfully in ${elapsedSeconds}s! Dispatched updates for ${runLog.successfulClients}/${runLog.totalClients} tenants.`);
-    return { status: "success", runId: logRefId, elapsedSeconds };
+    
+    if (runLog.failedClients > 0) {
+      runLog.status = "failed";
+      await runLogRef.set(runLog);
+      await addLog("error", `❌ Monolithic Meteorological Sync Engine completed with ${runLog.failedClients} client failure(s) in ${elapsedSeconds}s.`);
+      throw new Error(`Meteorological Sync finished with ${runLog.failedClients} client failure(s).`);
+    } else {
+      runLog.status = "completed";
+      await runLogRef.set(runLog);
+      await addLog("success", `🎉 Monolithic Meteorological Sync Engine completed successfully in ${elapsedSeconds}s! Dispatched updates for ${runLog.successfulClients}/${runLog.totalClients} tenants.`);
+      return { status: "success", runId: logRefId, elapsedSeconds };
+    }
   } catch (err: any) {
     runLog.status = "failed";
     runLog.completedAt = new Date().toISOString();
@@ -612,152 +667,183 @@ export async function executeMeteorologicalSync(options?: { queueMode?: "simulat
  * Can be called by real Cloud Tasks HTTP workers or local simulation queue.
  */
 export async function executeSingleClientSyncTask(domain: string, weather: any, runLogRefId?: string) {
-  const clientDocRef = db.collection("clients").doc(domain);
-  const docSnap = await clientDocRef.get();
-  if (!docSnap.exists) {
-    throw new Error(`Client domain '${domain}' not found in database.`);
-  }
-  const client = docSnap.data() as any;
-
-  let updatedCopy = null;
-
-  if (hasRealApiKey) {
-    const prompt = `
-      As "The Living Website" autonomous AI Webmaster, analyze the weather in ${client.city} and mutate the landing page copy for "${client.businessName}".
-      
-      Current Metrics:
-      - Temperature: ${weather.temp}°F
-      - Humidity: ${weather.humidity}%
-      - Conditions: ${weather.condition}
-      - Extreme Alert Active: ${weather.isExtreme ? "YES (Priority Dispatch Alert Required)" : "NO"}
-      - Feed Source: ${weather.source}
-      
-      Brand Details:
-      - Brand Name: "${client.businessName}"
-      - Service Area: ${client.city}
-      - Dispatch Phone: ${client.phone}
-      
-      Requirements:
-      1. If Extreme Weather is true, make the heroTitle and alertBanner intense and immediate (preventing AC breakdown, frozen lines, or furnace lockout).
-      2. Keep promotions realistic and centered around tune-ups, filter swaps, and capacitor diagnostics.
-      3. Write a high-quality educational seoArticle of exactly 120-150 words that integrates SEO keywords organically.
-    `;
-
-    const result = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: weatherCopySchema,
-        temperature: 0.75,
-      }
-    });
-
-    const rawText = result.text;
-    if (!rawText) throw new Error("Gemini returned empty response text.");
-    updatedCopy = JSON.parse(rawText.trim());
-  } else {
-    // Local Sandbox template builder
-    const isHot = weather.temp >= 85;
-    const isCold = weather.temp <= 45;
-
-    let hTitle = `Keep Your Home Comfortable: Professional cooling by ${client.businessName}`;
-    let hSub = `Same-day scheduling and emergency dispatch available in ${client.city}. Call ${client.phone} now.`;
-    let alertText = "";
-    let sHeading = `How Humidity Affects Your AC Performance in ${client.city}`;
-    let sArticle = `As humidity levels shift, residential systems work double-duty to both cool the atmosphere and dry the indoor airflow. High moisture builds condenser friction and reduces motor efficiency. Trust local experts at ${client.businessName} to optimize your cooling flow.`;
-    let promoList = ["$49 Professional Precision Tune-Up", "Free Condensate Clear with AC Tune-up"];
-
-    if (isHot) {
-      hTitle = `Scorching ${weather.temp}°F ${client.city} Heat: Same-Day Cooling dispatch from ${client.businessName}!`;
-      hSub = `Beat the severe humidity and keep your house dry and ice-cold. Emergency AC repair on standby: Call ${client.phone}.`;
-      alertText = `HEAT ADVISORY ACTIVE: Rapid response technicians dispatched in ${client.city} county.`;
-      promoList = ["$39 Rapid Diagnostic Dispatch", "Free AC Filter Upgrade"];
-    } else if (isCold) {
-      hTitle = `Severe Cold Alert in ${client.city}: Keep Warm with ${client.businessName}`;
-      hSub = `Failing furnace? Pipes freezing? Talk to a live HVAC technician now at ${client.phone}.`;
-      alertText = `WINTER WARNING: Priority heating dispatch is active. Call for emergency support.`;
-      promoList = ["$49 Furnace Safety Diagnostic", "$500 Off High-Efficiency Replacements"];
+  try {
+    const clientDocRef = db.collection("clients").doc(domain);
+    const docSnap = await clientDocRef.get();
+    if (!docSnap.exists) {
+      throw new Error(`Client domain '${domain}' not found in database.`);
     }
+    const client = docSnap.data() as any;
 
-    updatedCopy = {
-      heroTitle: hTitle,
-      heroSubtitle: hSub,
-      alertBanner: alertText,
-      seoHeading: sHeading,
-      seoArticle: sArticle,
-      promotions: promoList,
-      cacheTags: ["weather-update", "homepage"]
-    };
-  }
+    let updatedCopy = null;
 
-  // Mutate client doc in Firestore
-  await clientDocRef.update({
-    lastWeatherCopy: updatedCopy,
-    lastUpdated: new Date().toISOString(),
-    lastTelemetry: {
-      temp: weather.temp,
-      condition: weather.condition,
-      humidity: weather.humidity,
-      source: weather.source
-    }
-  });
-
-  // Revalidate edge cache
-  if (client.isrUrl && client.isrSecret) {
-    try {
-      const isMockDomain = ["hendersonhvac.com", "desertbreeze-cooling.com", "windycityheating.com", "cascadeclimate.com"].some(
-        (mockDom) => domain.toLowerCase().includes(mockDom)
-      );
-
-      if (isMockDomain) {
-        await sleep(300);
-      } else {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000);
-        await fetch(client.isrUrl, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${client.isrSecret}`
-          },
-          body: JSON.stringify({
-            tags: updatedCopy.cacheTags,
-            domain
-          }),
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-      }
-    } catch (revalErr: any) {
-      console.warn(`Edge invalidation warning for ${domain}: ${revalErr.message}`);
-    }
-  }
-
-  // Update Run Logs if active tracking run is supplied (thread-safe Transaction)
-  if (runLogRefId) {
-    const runLogRef = db.collection("runs").doc(runLogRefId);
-    await db.runTransaction(async (transaction) => {
-      const docSnap = await transaction.get(runLogRef);
-      if (docSnap.exists) {
-        const runData = docSnap.data() as any;
-        runData.processedClients = (runData.processedClients || 0) + 1;
-        runData.successfulClients = (runData.successfulClients || 0) + 1;
+    if (hasRealApiKey) {
+      const prompt = `
+        As "The Living Website" autonomous AI Webmaster, analyze the weather in ${client.city} and mutate the landing page copy for "${client.businessName}".
         
-        runData.logs.push({
-          timestamp: new Date().toLocaleTimeString(),
-          level: "success",
-          message: `[Task Worker OK] Dispatched mutations successfully for: ${domain}`
-        });
+        Current Metrics:
+        - Temperature: ${weather.temp}°F
+        - Humidity: ${weather.humidity}%
+        - Conditions: ${weather.condition}
+        - Extreme Alert Active: ${weather.isExtreme ? "YES (Priority Dispatch Alert Required)" : "NO"}
+        - Feed Source: ${weather.source}
+        
+        Brand Details:
+        - Brand Name: "${client.businessName}"
+        - Service Area: ${client.city}
+        - Dispatch Phone: ${client.phone}
+        
+        Requirements:
+        1. If Extreme Weather is true, make the heroTitle and alertBanner intense and immediate (preventing AC breakdown, frozen lines, or furnace lockout).
+        2. Keep promotions realistic and centered around tune-ups, filter swaps, and capacitor diagnostics.
+        3. Write a high-quality educational seoArticle of exactly 120-150 words that integrates SEO keywords organically.
+      `;
 
-        if (runData.processedClients >= runData.totalClients) {
-          runData.status = "completed";
-          runData.completedAt = new Date().toISOString();
+      const result = await generateContentWithRetry(ai, {
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: weatherCopySchema,
+          temperature: 0.75,
         }
-        transaction.set(runLogRef, runData);
+      });
+
+      const rawText = result.text;
+      if (!rawText) throw new Error("Gemini returned empty response text.");
+      updatedCopy = JSON.parse(rawText.trim());
+    } else {
+      // Local Sandbox template builder
+      const isHot = weather.temp >= 85;
+      const isCold = weather.temp <= 45;
+
+      let hTitle = `Keep Your Home Comfortable: Professional cooling by ${client.businessName}`;
+      let hSub = `Same-day scheduling and emergency dispatch available in ${client.city}. Call ${client.phone} now.`;
+      let alertText = "";
+      let sHeading = `How Humidity Affects Your AC Performance in ${client.city}`;
+      let sArticle = `As humidity levels shift, residential systems work double-duty to both cool the atmosphere and dry the indoor airflow. High moisture builds condenser friction and reduces motor efficiency. Trust local experts at ${client.businessName} to optimize your cooling flow.`;
+      let promoList = ["$49 Professional Precision Tune-Up", "Free Condensate Clear with AC Tune-up"];
+
+      if (isHot) {
+        hTitle = `Scorching ${weather.temp}°F ${client.city} Heat: Same-Day Cooling dispatch from ${client.businessName}!`;
+        hSub = `Beat the severe humidity and keep your house dry and ice-cold. Emergency AC repair on standby: Call ${client.phone}.`;
+        alertText = `HEAT ADVISORY ACTIVE: Rapid response technicians dispatched in ${client.city} county.`;
+        promoList = ["$39 Rapid Diagnostic Dispatch", "Free AC Filter Upgrade"];
+      } else if (isCold) {
+        hTitle = `Severe Cold Alert in ${client.city}: Keep Warm with ${client.businessName}`;
+        hSub = `Failing furnace? Pipes freezing? Talk to a live HVAC technician now at ${client.phone}.`;
+        alertText = `WINTER WARNING: Priority heating dispatch is active. Call for emergency support.`;
+        promoList = ["$49 Furnace Safety Diagnostic", "$500 Off High-Efficiency Replacements"];
+      }
+
+      updatedCopy = {
+        heroTitle: hTitle,
+        heroSubtitle: hSub,
+        alertBanner: alertText,
+        seoHeading: sHeading,
+        seoArticle: sArticle,
+        promotions: promoList,
+        cacheTags: ["weather-update", "homepage"]
+      };
+    }
+
+    // Mutate client doc in Firestore
+    await clientDocRef.update({
+      lastWeatherCopy: updatedCopy,
+      lastUpdated: new Date().toISOString(),
+      lastTelemetry: {
+        temp: weather.temp,
+        condition: weather.condition,
+        humidity: weather.humidity,
+        source: weather.source
       }
     });
-  }
 
-  return { success: true, domain };
+    // Revalidate edge cache
+    if (client.isrUrl && client.isrSecret) {
+      try {
+        const isMockDomain = ["hendersonhvac.com", "desertbreeze-cooling.com", "windycityheating.com", "cascadeclimate.com"].some(
+          (mockDom) => domain.toLowerCase().includes(mockDom)
+        );
+
+        if (isMockDomain) {
+          await sleep(300);
+        } else {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 4000);
+          await fetch(client.isrUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${client.isrSecret}`
+            },
+            body: JSON.stringify({
+              tags: updatedCopy.cacheTags,
+              domain
+            }),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+        }
+      } catch (revalErr: any) {
+        console.warn(`Edge invalidation warning for ${domain}: ${revalErr.message}`);
+      }
+    }
+
+    // Update Run Logs if active tracking run is supplied (thread-safe Transaction)
+    if (runLogRefId) {
+      const runLogRef = db.collection("runs").doc(runLogRefId);
+      await db.runTransaction(async (transaction) => {
+        const docSnap = await transaction.get(runLogRef);
+        if (docSnap.exists) {
+          const runData = docSnap.data() as any;
+          runData.processedClients = (runData.processedClients || 0) + 1;
+          runData.successfulClients = (runData.successfulClients || 0) + 1;
+          
+          runData.logs.push({
+            timestamp: new Date().toLocaleTimeString(),
+            level: "success",
+            message: `[Task Worker OK] Dispatched mutations successfully for: ${domain}`
+          });
+
+          if (runData.processedClients >= runData.totalClients) {
+            runData.status = (runData.failedClients || 0) > 0 ? "failed" : "completed";
+            runData.completedAt = new Date().toISOString();
+          }
+          transaction.set(runLogRef, runData);
+        }
+      });
+    }
+
+    return { success: true, domain };
+  } catch (err: any) {
+    if (runLogRefId) {
+      try {
+        const runLogRef = db.collection("runs").doc(runLogRefId);
+        await db.runTransaction(async (transaction) => {
+          const docSnap = await transaction.get(runLogRef);
+          if (docSnap.exists) {
+            const runData = docSnap.data() as any;
+            runData.processedClients = (runData.processedClients || 0) + 1;
+            runData.failedClients = (runData.failedClients || 0) + 1;
+            
+            runData.logs.push({
+              timestamp: new Date().toLocaleTimeString(),
+              level: "error",
+              message: `[Task Worker FAIL] Failed to process ${domain}: ${err.message}`
+            });
+
+            if (runData.processedClients >= runData.totalClients) {
+              runData.status = "failed";
+              runData.completedAt = new Date().toISOString();
+            }
+            transaction.set(runLogRef, runData);
+          }
+        });
+      } catch (logErr: any) {
+        console.error(`Failed to record task worker error in runs log: ${logErr.message}`);
+      }
+    }
+    throw err;
+  }
 }
