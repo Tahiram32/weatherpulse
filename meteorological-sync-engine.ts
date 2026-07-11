@@ -641,15 +641,13 @@ export async function executeMeteorologicalSync(options?: { queueMode?: "simulat
 
     const elapsedSeconds = ((Date.now() - startTime) / 1000).toFixed(2);
     runLog.completedAt = new Date().toISOString();
+    runLog.status = "completed";
+    await runLogRef.set(runLog);
     
     if (runLog.failedClients > 0) {
-      runLog.status = "failed";
-      await runLogRef.set(runLog);
-      await addLog("error", `❌ Monolithic Meteorological Sync Engine completed with ${runLog.failedClients} client failure(s) in ${elapsedSeconds}s.`);
-      throw new Error(`Meteorological Sync finished with ${runLog.failedClients} client failure(s).`);
+      await addLog("warn", `⚠️ Monolithic Meteorological Sync Engine completed with ${runLog.failedClients} micro-tenant failure(s) in ${elapsedSeconds}s. Run completed successfully overall.`);
+      return { status: "success", runId: logRefId, elapsedSeconds, warnings: `${runLog.failedClients} client failure(s)` };
     } else {
-      runLog.status = "completed";
-      await runLogRef.set(runLog);
       await addLog("success", `🎉 Monolithic Meteorological Sync Engine completed successfully in ${elapsedSeconds}s! Dispatched updates for ${runLog.successfulClients}/${runLog.totalClients} tenants.`);
       return { status: "success", runId: logRefId, elapsedSeconds };
     }
