@@ -33,6 +33,9 @@ try {
   console.error("⚠️ [SECURITY] Failed to read firebase-applet-config.json:", configErr.message);
 }
 
+const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || firebaseConfig.projectId;
+const firebaseDatabaseId = process.env.FIREBASE_FIRESTORE_DATABASE_ID || firebaseConfig.firestoreDatabaseId || "(default)";
+
 // Initialize Firebase Admin SDK with robust validation, prioritizing cloud-native ADC in production
 const isProduction = (process.env.NODE_ENV === "production" || !!process.env.K_SERVICE || !!process.env.K_REVISION) && !process.env.APPLET_ID;
 let adminApp;
@@ -40,7 +43,7 @@ let adminApp;
 if (isProduction) {
   // Rely on ambient Application Default Credentials (ADC) without looking at environment JSON variables in production
   adminApp = getApps().length === 0 ? initializeApp({
-    projectId: firebaseConfig.projectId
+    projectId: firebaseProjectId
   }) : getApp();
 } else {
   // Only attempt service account credential parsing and repair in development mode
@@ -65,24 +68,24 @@ if (isProduction) {
 
       adminApp = getApps().length === 0 ? initializeApp({
         credential: cert(serviceAccount),
-        projectId: firebaseConfig.projectId
+        projectId: firebaseProjectId
       }) : getApp();
     } catch (err: any) {
       console.error(`⚠️ [SECURITY] Failed to initialize Firebase Admin with development credentials: ${err.message}`);
       // Fallback to ADC in development
       adminApp = getApps().length === 0 ? initializeApp({
-        projectId: firebaseConfig.projectId
+        projectId: firebaseProjectId
       }) : getApp();
     }
   } else {
     // If no key is configured in development, use default ambient configuration
     adminApp = getApps().length === 0 ? initializeApp({
-      projectId: firebaseConfig.projectId
+      projectId: firebaseProjectId
     }) : getApp();
   }
 }
 
-const db = getFirestore(adminApp, firebaseConfig.firestoreDatabaseId || "(default)");
+const db = getFirestore(adminApp, firebaseDatabaseId);
 
 // Custom, lightweight, fully-compatible modular Firestore-like wrapper over admin-side Firestore SDK to preserve all existing call-sites perfectly
 export function doc(database: any, collectionPath: string, docId: string) {
