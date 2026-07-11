@@ -85,21 +85,32 @@ const ai = new GoogleGenAI({
   },
 });
 
+// Global process-level circuit breaker tracker to coordinate rate limits across concurrent task worker threads
+let globalCircuitBreakerActiveUntil = 0;
+
 /**
  * Robust wrapper around Gemini generateContent with automatic retry on 429 / RESOURCE_EXHAUSTED errors.
- * Implements exponential backoff with random jitter.
+ * Implements exponential backoff with random jitter and a global process-level circuit breaker
+ * to avoid thundering herd retry storms when hitting API rate limits.
  */
 async function generateContentWithRetry(aiClient: any, params: any, maxRetries = 5, initialDelayMs = 12000): Promise<any> {
   let attempt = 0;
   let delay = initialDelayMs;
   while (true) {
+    // 1. Cooperative Check-in: Wait if the global circuit breaker has been tripped by another thread
+    const now = Date.now();
+    if (globalCircuitBreakerActiveUntil > now) {
+      const waitMs = globalCircuitBreakerActiveUntil - now;
+      console.warn(`⏳ [CIRCUIT BREAKER ENFORCED] API rate limits active. Pausing request execution for ${(waitMs / 1000).toFixed(2)}s to preserve system resources...`);
+      await sleep(waitMs);
+    }
+
     try {
       return await aiClient.models.generateContent(params);
     } catch (err: any) {
       attempt++;
       const errStr = JSON.stringify(err).toLowerCase();
       const errMsg = (err?.message || "").toLowerCase();
-      const errStatus = (err?.status || "").toLowerCase();
       const isRateLimit = 
         errMsg.includes("429") || 
         errMsg.includes("resource_exhausted") || 
@@ -113,13 +124,20 @@ async function generateContentWithRetry(aiClient: any, params: any, maxRetries =
         err?.error?.code === 429 ||
         err?.error?.status === "RESOURCE_EXHAUSTED";
         
-      if (isRateLimit && attempt <= maxRetries) {
-        const jitter = Math.random() * 2000; // 0 to 2 seconds of random jitter
-        const currentDelay = delay + jitter;
-        console.warn(`⚠️ [GEMINI-RATE-LIMIT] 429 Quota Exceeded. Attempt ${attempt}/${maxRetries}. Retrying in ${(currentDelay / 1000).toFixed(2)}s...`);
-        await sleep(currentDelay);
-        delay *= 2.0; // Exponential backoff
-        continue;
+      if (isRateLimit) {
+        // 2. Trip Global Circuit Breaker immediately for all workers to freeze outbound API calls
+        const cooldownMs = 60000; // Freeze for 60s
+        globalCircuitBreakerActiveUntil = Date.now() + cooldownMs;
+        console.warn(`🚨 [CIRCUIT BREAKER TRIPPED] 429 Quota Exceeded. Activated global process circuit breaker for 60s!`);
+
+        if (attempt <= maxRetries) {
+          const jitter = Math.random() * 2000; // 0 to 2 seconds of random jitter
+          const currentDelay = delay + jitter;
+          console.warn(`⚠️ [GEMINI-RATE-LIMIT] Attempt ${attempt}/${maxRetries}. Retrying this thread in ${(currentDelay / 1000).toFixed(2)}s...`);
+          await sleep(currentDelay);
+          delay *= 2.0; // Exponential backoff
+          continue;
+        }
       }
       throw err;
     }
@@ -661,6 +679,51 @@ export async function executeMeteorologicalSync(options?: { queueMode?: "simulat
 }
 
 /**
+ * Dead-Letter Notification & Alerting system.
+ * Persists persistent exceptions into a high-visibility collection in Firestore,
+ * and publishes real-time critical payloads to Slack/Discord webhook if configured.
+ */
+export async function createDeadLetterAlert(domain: string, error: any, runLogRefId?: string) {
+  const alertPayload = {
+    domain,
+    runLogRefId: runLogRefId || "manual-or-individual",
+    timestamp: new Date().toISOString(),
+    errorMessage: error?.message || "Unknown error",
+    errorStack: error?.stack || "",
+    severity: "critical",
+    resolved: false
+  };
+
+  try {
+    // 1. Persist alert to Firestore "alerts" collection for admin tracking
+    await db.collection("alerts").add(alertPayload);
+    console.warn(`🚨 [ALERT LOGGED] Created Dead-Letter Alert in Firestore for domain: ${domain}`);
+  } catch (dbErr: any) {
+    console.error(`Failed to record Dead-Letter Alert to Firestore: ${dbErr.message}`);
+  }
+
+  // 2. Dispatch real-time notification webhook to Slack/Discord/PagerDuty if configured
+  const webhookUrl = process.env.WEATHER_SYNC_ALERT_WEBHOOK_URL;
+  if (webhookUrl) {
+    try {
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: `🚨 *[CRITICAL METEOROLOGICAL ENGINE ALERT]*\n*Domain:* \`${domain}\`\n*Run ID:* \`${runLogRefId || "N/A"}\`\n*Error:* \`${alertPayload.errorMessage}\`\n*Stack Trace:* \`\`\`${alertPayload.errorStack.slice(0, 800)}\`\`\``
+        })
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      console.log(`📡 [ALERT WEBHOOK DISPATCHED] Successfully pushed real-time alert for ${domain}.`);
+    } catch (whErr: any) {
+      console.error(`Failed to dispatch real-time alert webhook: ${whErr.message}`);
+    }
+  }
+}
+
+/**
  * Processes a single tenant weather update task in complete isolation.
  * Can be called by real Cloud Tasks HTTP workers or local simulation queue.
  */
@@ -815,6 +878,11 @@ export async function executeSingleClientSyncTask(domain: string, weather: any, 
 
     return { success: true, domain };
   } catch (err: any) {
+    // Fire-and-forget real-time Dead-Letter Alerting & Monitoring
+    createDeadLetterAlert(domain, err, runLogRefId).catch(alertErr => {
+      console.error("Failed to process dead-letter alert chain:", alertErr.message);
+    });
+
     if (runLogRefId) {
       try {
         const runLogRef = db.collection("runs").doc(runLogRefId);

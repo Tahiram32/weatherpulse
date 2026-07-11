@@ -169,86 +169,87 @@ async function runOrchestrator() {
 
     await addLog("info", `Prepared mutation queue. Concurrency limit: ${concurrencyLimit}, Stagger Throttle: ${throttleMs}ms. Invoking ${mutationQueue.length} isolated tenant worker endpoints...`);
 
-    // Let's implement an elegant parallel worker pool that consumes tasks concurrently while strictly staggering start times
-    let currentTaskIndex = 0;
-    
-    const executeWorker = async () => {
-      while (true) {
-        let taskIndex: number;
-        // Atomically fetch the next task index
-        if (currentTaskIndex >= mutationQueue.length) {
-          break;
+    let activeCount = 0;
+
+    // Helper to execute a single task worker endpoint
+    const runTaskWorker = async (task: any, index: number) => {
+      const { client, weather } = task;
+      const domain = client.domain;
+      await addLog("info", `[Queue ${index + 1}/${mutationQueue.length}] Launching concurrent webhook trigger for: ${domain} (City: ${client.city} | Temp: ${weather.temp}°F)`);
+
+      try {
+        const workerUrl = `${normalizedBaseUrl}/api/pipeline/task-worker`;
+        const response = await fetch(workerUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${taskWorkerSecret}`
+          },
+          body: JSON.stringify({
+            domain,
+            weather,
+            runLogRefId: logRefId
+          })
+        });
+
+        if (!response.ok) {
+          const bodyText = await response.text();
+          throw new Error(`Worker HTTP ${response.status}: ${bodyText}`);
         }
-        taskIndex = currentTaskIndex++;
+
+        const resData = await response.json();
+        console.log(`✅ [Worker Success] Tenant ${domain} completed successfully:`, resData);
+      } catch (err: any) {
+        await addLog("error", `[Worker Failed] Micro-tenant mutation failed for ${domain}: ${err.message}`);
         
-        const { client, weather } = mutationQueue[taskIndex];
-        const domain = client.domain;
-
-        // 1. Apply deterministic staggered delay based on the index to eliminate immediate API hammer/429
-        const staggerDelay = taskIndex * throttleMs;
-        if (staggerDelay > 0) {
-          await addLog("info", `[Stagger Queue] Spacing start of webhook worker for ${domain}. Stagger-delay slot is ${staggerDelay / 1000}s...`);
-          await new Promise(resolve => setTimeout(resolve, staggerDelay));
-        }
-
-        await addLog("info", `[Queue ${taskIndex + 1}/${mutationQueue.length}] Launching concurrent webhook trigger for: ${domain} (City: ${client.city} | Temp: ${weather.temp}°F)`);
-
+        // Thread-safe update of run statistics in Firestore
         try {
-          const workerUrl = `${normalizedBaseUrl}/api/pipeline/task-worker`;
-          const response = await fetch(workerUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${taskWorkerSecret}`
-            },
-            body: JSON.stringify({
-              domain,
-              weather,
-              runLogRefId: logRefId
-            })
-          });
-
-          if (!response.ok) {
-            const bodyText = await response.text();
-            throw new Error(`Worker HTTP ${response.status}: ${bodyText}`);
-          }
-
-          const resData = await response.json();
-          console.log(`✅ [Worker Success] Tenant ${domain} completed successfully:`, resData);
-        } catch (err: any) {
-          await addLog("error", `[Worker Failed] Micro-tenant mutation failed for ${domain}: ${err.message}`);
-          
-          // Thread-safe update of run statistics in Firestore
-          try {
-            await db.runTransaction(async (transaction) => {
-              const docSnap = await transaction.get(runLogRef);
-              if (docSnap.exists) {
-                const runData = docSnap.data() as any;
-                runData.processedClients = (runData.processedClients || 0) + 1;
-                runData.failedClients = (runData.failedClients || 0) + 1;
-                if (runData.processedClients >= runData.totalClients) {
-                  runData.status = "completed";
-                  runData.completedAt = new Date().toISOString();
-                }
-                transaction.set(runLogRef, runData);
+          await db.runTransaction(async (transaction) => {
+            const docSnap = await transaction.get(runLogRef);
+            if (docSnap.exists) {
+              const runData = docSnap.data() as any;
+              runData.processedClients = (runData.processedClients || 0) + 1;
+              runData.failedClients = (runData.failedClients || 0) + 1;
+              if (runData.processedClients >= runData.totalClients) {
+                runData.status = "completed";
+                runData.completedAt = new Date().toISOString();
               }
-            });
-          } catch (updateErr: any) {
-            console.error(`Failed to update run stats for ${domain}:`, updateErr.message);
-          }
+              transaction.set(runLogRef, runData);
+            }
+          });
+        } catch (updateErr: any) {
+          console.error(`Failed to update run stats for ${domain}:`, updateErr.message);
         }
       }
     };
 
-    // Spin up concurrent worker threads
-    const workerThreads: Promise<void>[] = [];
-    const threadCount = Math.min(concurrencyLimit, mutationQueue.length);
-    for (let t = 0; t < threadCount; t++) {
-      workerThreads.push(executeWorker());
+    // Sliding-Window Dispatch Queue
+    // This loop executes sequentially to space out dispatches via throttleMs, avoiding timer heap bloat,
+    // while strictly holding back new triggers if we are at our concurrency ceiling (preventing EMFILE / socket starvation)
+    for (let i = 0; i < mutationQueue.length; i++) {
+      // 1. Apply backpressure: If active worker count is at capacity, block dispatch until a slot opens
+      while (activeCount >= concurrencyLimit) {
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      // 2. Pace the dispatch: Enforce throttle delay one task at a time (at most one setTimeout in Event Loop at any moment)
+      if (i > 0 && throttleMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, throttleMs));
+      }
+
+      const task = mutationQueue[i];
+      activeCount++;
+
+      // Dispatch asynchronously without awaiting
+      runTaskWorker(task, i).finally(() => {
+        activeCount--;
+      });
     }
 
-    // Wait for all worker threads to complete their queues
-    await Promise.all(workerThreads);
+    // 3. Block main orchestrator termination until the final worker thread resolves
+    while (activeCount > 0) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     
