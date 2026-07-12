@@ -2,8 +2,8 @@ name: Meteorological Weather Sync
 
 on:
   schedule:
-    # Trigger twice daily at 00:00 and 12:00 UTC (100% Free Cron)
-    - cron: '0 */12 * * *'
+    # Trigger hourly to capture real-time severe meteorological fluctuations in target zones immediately
+    - cron: '0 * * * *'
   workflow_dispatch:
     inputs:
       app_url_override:

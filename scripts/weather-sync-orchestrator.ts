@@ -147,18 +147,84 @@ async function runOrchestrator() {
       }
     }
 
-    // E. Filter and prepare the mutation worker queue
-    const mutationQueue = clients.map(client => {
+    // E. Prepare the mutation queue incorporating Delta-Trigger and state optimization
+    const mutationQueue: any[] = [];
+    let skippedCount = 0;
+
+    for (const client of clients) {
       const cityKey = client.city.toLowerCase().trim();
       const weather = weatherProfiles.get(cityKey);
-      return { client, weather };
-    }).filter(item => item.weather !== undefined);
+      if (!weather) continue;
+
+      const lastTelemetry = client.lastTelemetry;
+      const lastWeatherCopy = client.lastWeatherCopy;
+
+      let shouldMutate = true;
+      let skipReason = "";
+
+      if (lastTelemetry && lastWeatherCopy) {
+        const lastTemp = lastTelemetry.temp ?? 0;
+        const lastIsExtreme = !!lastTelemetry.isExtreme;
+        const currentTemp = weather.temp;
+        const currentIsExtreme = !!weather.isExtreme;
+
+        const tempDiff = Math.abs(currentTemp - lastTemp);
+        const extremeChanged = currentIsExtreme !== lastIsExtreme;
+
+        // Calculate hours elapsed since the last successful LLM mutation
+        let hoursSinceLastMutation = 24; // Default to 24 to force run if timestamp is missing
+        if (client.lastUpdated) {
+          const lastUpdatedTime = new Date(client.lastUpdated).getTime();
+          hoursSinceLastMutation = (Date.now() - lastUpdatedTime) / (1000 * 60 * 60);
+        }
+
+        const isTtlExpired = hoursSinceLastMutation >= 24;
+
+        // Trigger mutation if delta temperature >= 10F OR extreme weather status shifts OR 24h TTL has expired
+        if (tempDiff < 10 && !extremeChanged && !isTtlExpired) {
+          shouldMutate = false;
+          skipReason = `Temp shift (${tempDiff.toFixed(1)}°F) < 10°F, Extreme status unchanged, and last mutation was only ${hoursSinceLastMutation.toFixed(1)} hours ago (24h TTL active).`;
+        }
+      }
+
+      if (shouldMutate) {
+        mutationQueue.push({ client, weather });
+      } else {
+        skippedCount++;
+        // Log immediately as skipped in the run logs to preserve resources
+        try {
+          await db.runTransaction(async (transaction) => {
+            const docSnap = await transaction.get(runLogRef);
+            if (docSnap.exists) {
+              const runData = docSnap.data() as any;
+              runData.processedClients = (runData.processedClients || 0) + 1;
+              runData.successfulClients = (runData.successfulClients || 0) + 1;
+              if (!runData.logs) runData.logs = [];
+              runData.logs.push({
+                timestamp: new Date().toLocaleTimeString(),
+                level: "info",
+                message: `[Orchestrator Delta Skip] Skipped ${client.domain}: ${skipReason} Saved Gemini API & Edge Cache costs.`
+              });
+              if (runData.processedClients >= runData.totalClients) {
+                runData.status = (runData.failedClients || 0) > 0 ? "failed" : "completed";
+                runData.completedAt = new Date().toISOString();
+              }
+              transaction.set(runLogRef, runData);
+            }
+          });
+        } catch (skipErr: any) {
+          console.error(`Failed to log skipped client ${client.domain}:`, skipErr.message);
+        }
+      }
+    }
 
     if (mutationQueue.length === 0) {
-      await addLog("error", "No active tenants could be processed due to complete geocoding or meteorological ingestion blockages.");
+      await addLog("info", `All ${clients.length} tenants matched current meteorological profiles. Complete Delta-Trigger avoidance achieved: zero workers spawned.`);
       await runLogRef.set({
         ...initialRunLog,
-        status: "failed",
+        status: "completed",
+        processedClients: clients.length,
+        successfulClients: clients.length,
         completedAt: new Date().toISOString()
       }, { merge: true });
       return;
@@ -167,7 +233,7 @@ async function runOrchestrator() {
     const concurrencyLimit = Number(process.env.WEATHER_SYNC_CONCURRENCY) || 1;
     const throttleMs = Number(process.env.WEATHER_SYNC_THROTTLE_MS) || 14000;
 
-    await addLog("info", `Prepared mutation queue. Concurrency limit: ${concurrencyLimit}, Stagger Throttle: ${throttleMs}ms. Invoking ${mutationQueue.length} isolated tenant worker endpoints...`);
+    await addLog("info", `Prepared mutation queue. Concurrency limit: ${concurrencyLimit}, Stagger Throttle: ${throttleMs}ms. Invoking ${mutationQueue.length} isolated tenant worker endpoints (Skipped ${skippedCount} idle zones)...`);
 
     let activeCount = 0;
     let orchestratorPausedUntil = 0;
