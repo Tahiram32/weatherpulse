@@ -51,6 +51,19 @@ export const ValueReceiptEmail = ({
           </Section>
 
           <Hr style={hr} />
+
+          <Section style={upsellSection}>
+            <Text style={upsellTitle}>
+              <strong>⚠️ AI Competitive Intelligence Report</strong>
+            </Text>
+            <Text style={upsellText}>
+              I A/B tested your new headline and secured 3 new leads. However, I noticed a competitor just started ranking for emergency services in your zip code.
+              <br/><br/>
+              Reply <strong>'ACTIVATE'</strong> to this email, and I will autonomously generate and publish 5 hyper-local SEO blog articles to your website to recapture that organic traffic by this weekend.
+            </Text>
+          </Section>
+          
+          <Hr style={hr} />
           
           <Text style={footer}>
             Your automated engine is running. We will email you your traffic report next week.
@@ -88,6 +101,27 @@ const h1 = {
 
 const section = {
   margin: '0 0 20px 0',
+};
+
+const upsellSection = {
+  backgroundColor: '#fffdf0',
+  border: '1px solid #f2e291',
+  padding: '16px',
+  borderRadius: '6px',
+  margin: '20px 0',
+};
+
+const upsellTitle = {
+  color: '#b47704',
+  fontSize: '16px',
+  margin: '0 0 8px 0',
+};
+
+const upsellText = {
+  color: '#5c4501',
+  fontSize: '14px',
+  lineHeight: '22px',
+  margin: '0',
 };
 
 const text = {

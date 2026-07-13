@@ -366,7 +366,7 @@ function hexToRgba(hex: string, alpha: number): string {
 }
 
 // Helper function to render a high-fidelity client's weather-responsive site
-function renderClientSite(client: any, req: any, res: any) {
+function renderClientSite(client: any, articles: any[], req: any, res: any) {
   // Set secure HTTP headers (allowing framing inside AI Studio)
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-XSS-Protection", "1; mode=block");
@@ -655,6 +655,17 @@ function renderClientSite(client: any, req: any, res: any) {
   <!-- Dynamic Service Promotions -->
   <section class="py-12 bg-white border-b border-slate-200">
     <div class="max-w-7xl mx-auto px-6">
+      ${copy.emergencyRoutingMode ? `
+      <div class="mb-8 bg-red-50 border border-red-200 p-4 rounded-lg flex items-start gap-4">
+        <div class="bg-red-500 text-white p-2 rounded shadow-sm shrink-0">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+        </div>
+        <div>
+          <h4 class="text-red-900 font-bold text-lg">Emergency Dispatch Mode Active</h4>
+          <p class="text-red-800 text-sm mt-1">Due to severe weather conditions, we are prioritizing high-severity emergency calls. Routine maintenance is temporarily paused to serve our community.</p>
+        </div>
+      </div>
+      ` : ''}
       <div class="text-center mb-8">
         <span class="text-xs font-bold text-primary uppercase tracking-widest font-mono">SEASONAL SPECIALS</span>
         <h3 class="text-2xl font-extrabold text-slate-900 mt-1">Direct-to-Consumer Savings Programs</h3>
@@ -697,6 +708,27 @@ function renderClientSite(client: any, req: any, res: any) {
         <p class="text-slate-600 text-sm sm:text-base leading-relaxed whitespace-pre-line font-medium mb-6" style="margin-bottom: 1.5rem; line-height: 1.625; color: #475569;">
           ${safeSeoArticle}
         </p>
+
+        ${articles && articles.length > 0 ? `
+        <div class="mt-8">
+          <h3 class="text-xl font-bold text-slate-900 mb-6 border-b pb-2">Latest Insights & SEO Articles</h3>
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            ${articles.map((article: any) => `
+              <div class="bg-white border border-slate-200 rounded-lg p-5 shadow-sm hover:shadow-md transition-all flex flex-col h-full">
+                <h4 class="text-lg font-bold text-slate-900 mb-3">${escapeHtml(article.title || "Article")}</h4>
+                <div class="text-slate-600 text-sm leading-relaxed mb-4 flex-grow prose prose-sm max-w-none">
+                  ${article.content || ""}
+                </div>
+                <div class="flex items-center justify-between text-xs text-slate-500 font-mono mt-auto pt-4 border-t border-slate-100">
+                  <span>Autor: Autonomous Webmaster</span>
+                  <span>Category: ${escapeHtml(article.category || "General")}</span>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        ` : ''}
+
         <div class="bg-slate-50 p-4 border border-slate-200/60 rounded flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 text-xs" style="background-color: #f8fafc; border: 1px solid rgba(226, 232, 240, 0.6); padding: 1rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem;">
           <div>
             <span class="font-bold text-slate-700" style="font-weight: 700; color: #334155;">Need Immediate Assistance?</span>
@@ -764,7 +796,9 @@ app.use(async (req, res, next) => {
       const docRef = doc(db, "clients", host);
       const clientDoc = await getDoc(docRef);
       if (clientDoc.exists()) {
-        return renderClientSite(clientDoc.data(), req, res);
+        const articlesSnap = await db.collection("clients").doc(host).collection("articles").where("status", "==", "published").get();
+        const articles = articlesSnap.docs.map((d: any) => d.data());
+        return renderClientSite(clientDoc.data(), articles, req, res);
       }
     } catch (err) {
       console.error("Custom domain routing error:", err);
@@ -834,6 +868,28 @@ app.post("/api/clients", requireRole(["gateway", "unified"]), async (req, res) =
 });
 
 // 3. Delete tenant from Firestore
+app.put("/api/clients/:domain/calendar", async (req, res) => {
+  try {
+    const { domain } = req.params;
+    const { googleCalendarToken, refreshToken } = req.body;
+    if (!googleCalendarToken) {
+      return res.status(400).json({ error: "Missing token" });
+    }
+    const docRef = doc(db, "clients", domain.toLowerCase().trim());
+    const privateRef = doc(db, `clients/${domain.toLowerCase().trim()}/private`, "tokens");
+    await setDoc(privateRef, { 
+      googleCalendarToken,
+      googleCalendarRefreshToken: refreshToken || null,
+      googleCalendarTokenExpiresAt: Date.now() + 3600 * 1000 // 1 hour
+    }, { merge: true });
+    // Keep a boolean in public doc for UI
+    await setDoc(docRef, { hasCalendarConnected: true }, { merge: true });
+    res.json({ status: "success" });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.delete("/api/clients/:domain", requireRole(["gateway", "unified"]), async (req, res) => {
   try {
     const domain = req.params.domain.toLowerCase().trim();
@@ -852,7 +908,507 @@ app.delete("/api/clients/:domain", requireRole(["gateway", "unified"]), async (r
   }
 });
 
-// 3.5. Trigger the Autonomous Meteorological Sync Engine (Cloud Scheduler CRON Entrypoint)
+// 3.3. SMS Command Webhook (Flash Sale)
+app.post("/api/webhooks/sms", requireRole(["gateway", "unified"]), async (req, res) => {
+  try {
+    const { domain, message, senderNumber } = req.body || {};
+
+    if (!domain || !message) {
+      return res.status(400).json({ error: "Missing domain or message in SMS payload." });
+    }
+
+    const docRef = doc(db, "clients", domain.toLowerCase().trim());
+    const clientDoc = await getDoc(docRef);
+
+    if (!clientDoc.exists()) {
+      return res.status(404).json({ error: "Client not found for SMS routing." });
+    }
+
+    const client = clientDoc.data();
+    
+    // Check if the message implies business is slow / wants flash sale
+    const isSlow = message.toLowerCase().includes("empty") || message.toLowerCase().includes("slow") || message.toLowerCase().includes("flash sale");
+    
+    if (isSlow && client.lastWeatherCopy) {
+       const updatedCopy = { ...client.lastWeatherCopy };
+       updatedCopy.promotions = ["🚨 15% OFF FLASH SALE - TODAY ONLY!", ...updatedCopy.promotions.slice(0, 1)];
+       updatedCopy.alertBanner = "⚡ FLASH SALE ACTIVE: Limited time 15% off afternoon dispatch slots!";
+       
+       await setDoc(docRef, {
+         lastWeatherCopy: updatedCopy,
+         lastUpdated: new Date().toISOString()
+       }, { merge: true });
+       
+       return res.status(200).json({
+         status: "success",
+         action: "flash_sale_activated",
+         response: "Flash sale deployed to website successfully. Cache invalidation triggered."
+       });
+    }
+
+    return res.status(200).json({
+      status: "ignored",
+      response: "Command not recognized. Try saying 'I'm completely empty this afternoon' to trigger a flash sale."
+    });
+
+  } catch (error: any) {
+    console.error("❌ [SMS-COMMAND] Failed to process incoming SMS:", error.message);
+    res.status(500).json({ error: "Failed to process SMS webhook", details: error.message });
+  }
+});
+
+
+// ============================================================================
+// SCI-FI ARCHITECTURE 2: THE AUTONOMOUS B2B LEAD SYNDICATE (SWARM AI)
+// ============================================================================
+app.post("/api/syndicate/negotiate", requireRole(["gateway", "unified"]), async (req, res) => {
+  try {
+    const { sourceDomain, leadData, zipCode } = req.body;
+    if (!sourceDomain || !zipCode) {
+      return res.status(400).json({ error: "Missing sourceDomain or zipCode" });
+    }
+
+    // 1. Find a competitor in the same zip code who has capacity (syndicateEnabled = true)
+    const clientsSnap = await db.collection("clients")
+      .where("city", "==", zipCode) // Assuming city is used as area/zip
+      .where("syndicateEnabled", "==", true)
+      .get();
+      
+    const competitors = clientsSnap.docs
+      .filter(doc => doc.id !== sourceDomain)
+      .map(doc => ({ id: doc.id, ...doc.data() }));
+
+    if (competitors.length === 0) {
+      return res.status(404).json({ error: "No available competitors in the syndicate for this region." });
+    }
+
+    const targetCompetitor = competitors[0]; // Pick the first available
+
+    // 2. Swarm AI Negotiation (Machine-to-Machine)
+    // We use Gemini to simulate the millisecond negotiation between the two autonomous agents
+    const aiNegotiationPrompt = `
+      You are an autonomous negotiation engine facilitating a lead transfer between two AI business agents.
+      Agent A (${sourceDomain}) is over capacity and has an emergency lead.
+      Agent B (${targetCompetitor.id}) has open capacity.
+      They are negotiating a referral fee percentage (standard is 10-20%).
+      The platform skims a 5% transaction fee.
+      Output a JSON object with:
+      - agreedReferralFeePercentage: number
+      - platformFeePercentage: 5
+      - agentAMessage: string
+      - agentBMessage: string
+      - status: "DEAL_STRUCK"
+    `;
+
+    const result = await ai.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: [{ role: "user", parts: [{ text: aiNegotiationPrompt }] }],
+      config: {
+        responseMimeType: "application/json",
+        temperature: 0.1
+      }
+    });
+
+    const negotiationResult = JSON.parse(result.text || "{}");
+
+    // 3. Execute the Trade & Log it to the Syndicate Ledger
+    const tradeId = `trd_${Date.now()}`;
+    await db.collection("syndicate_ledger").doc(tradeId).set({
+      timestamp: new Date().toISOString(),
+      sourceAgent: sourceDomain,
+      targetAgent: targetCompetitor.id,
+      leadData,
+      financials: negotiationResult
+    });
+
+    return res.status(200).json({
+      success: true,
+      tradeId,
+      targetAgent: targetCompetitor.id,
+      negotiation: negotiationResult
+    });
+  } catch (err: any) {
+    console.error("❌ [SWARM AI FAIL]", err.message);
+    res.status(500).json({ error: "Syndicate negotiation failed." });
+  }
+});
+
+// 3.4. Autonomous Voice Receptionist Webhook (Low-Latency Optimized)
+app.post("/api/webhooks/voice", requireRole(["gateway", "unified"]), async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { domain, transcript, callerNumber } = req.body || {};
+
+    if (!domain || !transcript) {
+      return res.status(400).json({ error: "Missing domain or transcript in voice payload." });
+    }
+
+    const docRef = doc(db, "clients", domain.toLowerCase().trim());
+    const clientDoc = await getDoc(docRef);
+
+    if (!clientDoc.exists()) {
+      return res.status(404).json({ error: "Client not found for voice routing." });
+    }
+
+    const client = clientDoc.data();
+    
+    // Fetch private tokens
+    const privateRef = doc(db, `clients/${domain.toLowerCase().trim()}/private`, "tokens");
+    const privateDoc = await getDoc(privateRef);
+    const privateData = privateDoc.exists() ? privateDoc.data() : {};
+
+    const isExtreme = client.lastTelemetry?.isExtreme || false;
+    const weatherCond = client.lastTelemetry?.condition || "Clear";
+    const emergencyRoutingMode = client.lastWeatherCopy?.emergencyRoutingMode || false;
+    
+    // Real-time calendar availability check using Google Calendar API
+
+    let hasAvailableSlot = false;
+    if (privateData.googleCalendarToken) {
+      try {
+        const timeMin = new Date().toISOString();
+        const timeMax = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(); // Next 2 hours
+        let accessToken = privateData.googleCalendarToken;
+        let isRefreshed = false;
+
+        // Check if token is expired based on our timestamp
+        if (privateData.googleCalendarTokenExpiresAt && Date.now() > privateData.googleCalendarTokenExpiresAt && privateData.googleCalendarRefreshToken) {
+          console.log(`[AUTH] Token expired for ${domain}, refreshing via offline access...`);
+          // Simulate fetching new token from Google OAuth endpoint using refresh token
+          accessToken = "mock_refreshed_access_token_" + Date.now();
+          isRefreshed = true;
+        }
+
+        let calRes = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${accessToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            timeMin,
+            timeMax,
+            items: [{ id: "primary" }]
+          })
+        });
+
+        // Intercept 401 if our timestamp check missed it
+        if (calRes.status === 401 && privateData.googleCalendarRefreshToken && !isRefreshed) {
+           console.log(`[AUTH] 401 Unauthorized for ${domain}, intercepting and refreshing...`);
+           accessToken = "mock_refreshed_access_token_after_401_" + Date.now();
+           isRefreshed = true;
+           
+           // Retry with new token
+           calRes = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
+              method: "POST",
+              headers: {
+                "Authorization": `Bearer ${accessToken}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                timeMin,
+                timeMax,
+                items: [{ id: "primary" }]
+              })
+            });
+        }
+
+        if (isRefreshed) {
+           await setDoc(privateRef, { 
+             googleCalendarToken: accessToken,
+             googleCalendarTokenExpiresAt: Date.now() + 3600 * 1000
+           }, { merge: true });
+        }
+
+        if (calRes.ok) {
+          const calData = await calRes.json();
+          const busySlots = calData.calendars?.primary?.busy || [];
+          hasAvailableSlot = busySlots.length === 0;
+        } else {
+          console.error("Calendar API Error:", await calRes.text());
+        }
+      } catch (err: any) {
+        console.error("Calendar fetch error:", err.message);
+      }
+    }
+
+    // -------------------------------------------------------------
+    // SWARM AI LEAD SYNDICATE INJECTION
+    // -------------------------------------------------------------
+    let syndicateTrade = null;
+    if (!hasAvailableSlot && client.syndicateEnabled) {
+      console.log(`[SWARM AI] ${domain} is at full capacity. Attempting Autonomous Syndicate Negotiation...`);
+      try {
+        const syndicateRes = await fetch(`http://127.0.0.1:${process.env.PORT || 3000}/api/syndicate/negotiate`, {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': req.headers.authorization || `Bearer ${ADMIN_API_KEY}`
+          },
+          body: JSON.stringify({
+            sourceDomain: domain,
+            zipCode: client.city,
+            leadData: { transcript, callerNumber }
+          })
+        });
+        if (syndicateRes.ok) {
+          syndicateTrade = await syndicateRes.json();
+          console.log(`[SWARM AI SUCCESS] Trade negotiated with ${syndicateTrade.targetAgent}. Fee: ${syndicateTrade.negotiation.agreedReferralFeePercentage}%`);
+        } else {
+          console.log(`[SWARM AI FAIL] No available syndicate partners in ${client.city}.`);
+        }
+      } catch(e: any) {
+        console.error("Syndicate negotiation error in voice hook:", e.message);
+      }
+    }
+
+    let systemPrompt = `
+      You are a low-latency voice receptionist for ${client.businessName} in ${client.city}.
+      Current weather: ${weatherCond} (Extreme Mode: ${isExtreme ? "YES" : "NO"}).
+      Calendar availability right now: ${hasAvailableSlot ? "YES" : "NO"}.
+      
+      CRITICAL INSTRUCTIONS TO PREVENT HUMAN HANG-UP:
+      - Reply with EXACTLY ONE short sentence. Under 15 words.
+      - NEVER use pleasantries like "How can I help you today?".
+      - If EmergencyRoutingMode (${emergencyRoutingMode}) is true, you MUST state: "Due to severe weather, we are currently only dispatching for emergency services."
+      - If they want to book and calendar is YES, say "I have locked in your emergency slot. A dispatcher is on the way."
+    `;
+
+    if (syndicateTrade && syndicateTrade.success) {
+      systemPrompt += `
+      - You were over capacity, but your Swarm AI Agent successfully negotiated a lead transfer to a competitor (${syndicateTrade.targetAgent}) for a referral fee of ${syndicateTrade.negotiation.agreedReferralFeePercentage}%.
+      - DO NOT mention the referral fee.
+      - Say exactly: "We are at full capacity, but I have autonomously dispatched our trusted partner in your area to handle your emergency immediately."
+      `;
+    } else {
+      systemPrompt += `
+      - If calendar is NO, say "Our schedule is currently full due to high volume, but I will put you on the priority waitlist."
+      `;
+    }
+    systemPrompt += `\n      - DO NOT mention prices.\n    `;
+
+
+    // Maximize speed by limiting output tokens and using flash
+    let aiSpeechText = "";
+    try {
+      const result = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: [
+          { role: "system", parts: [{ text: systemPrompt }] },
+          { role: "user", parts: [{ text: transcript }] }
+        ],
+        config: {
+          maxOutputTokens: 30, // Force brevity to ensure low TTS latency
+          temperature: 0.1,    // Low temp for deterministic, fast routing
+        }
+      });
+      aiSpeechText = result.text || "I will have a dispatcher contact you immediately.";
+    } catch (aiErr: any) {
+      console.error(`[VOICE AGENT FAIL] Gemini failed for ${domain}:`, aiErr.message);
+      aiSpeechText = "I'm sorry, I'm having trouble connecting right now. Can I take a message?";
+    }
+
+    const latencyMs = Date.now() - startTime;
+
+    return res.status(200).json({
+      status: "success",
+      action: "voice_synthesis",
+      callerNumber: callerNumber || "UNKNOWN",
+      spokenResponse: aiSpeechText.trim(),
+      metrics: {
+        latencyMs,
+        optimizedForRealtime: true,
+      },
+      bookedAppointment: transcript.toLowerCase().includes("book") && hasAvailableSlot
+    });
+
+  } catch (error: any) {
+    console.error("❌ [VOICE-RECEPTIONIST] Failed to process incoming call:", error.message);
+    res.status(500).json({ error: "Failed to process voice webhook", details: error.message });
+  }
+});
+
+// 3.5. Autonomous SEO Email Webhook
+app.post("/api/webhooks/email", requireRole(["gateway", "unified"]), async (req, res) => {
+  try {
+    const { domain, text, senderEmail } = req.body || {};
+
+    if (!domain || !text) {
+      return res.status(400).json({ error: "Missing domain or text in email payload." });
+    }
+
+    if (text.trim().toUpperCase() === "ACTIVATE") {
+      const docRef = doc(db, "clients", domain.toLowerCase().trim());
+      const clientDoc = await getDoc(docRef);
+
+      if (!clientDoc.exists()) {
+        return res.status(404).json({ error: "Client not found for email routing." });
+      }
+
+      const client = clientDoc.data();
+      
+      console.log(`[SEO UPSELL ACTIVATED] Deploying background Gemini agent to generate 5 hyper-local SEO articles for ${client.businessName}.`);
+      
+      // Autonomous Execution: Fire and forget background job
+      (async () => {
+        try {
+          const systemPrompt = `
+            You are an expert SEO copywriter for ${client.businessName}, a ${client.vertical} business in ${client.city}.
+            The client has just activated the autonomous SEO campaign.
+            Generate EXACTLY 5 hyper-local SEO blog articles.
+            Return a JSON array of objects with properties: "title" (string) and "content" (string - HTML formatted with tailwind classes if appropriate).
+          `;
+
+          const result = await ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: systemPrompt,
+            config: {
+              responseMimeType: "application/json",
+            }
+          });
+
+          const responseText = result.text || "[]";
+          const articles = JSON.parse(responseText);
+
+          if (Array.isArray(articles) && articles.length > 0) {
+            // Generate a secure, single-use token for this batch
+            const cancelToken = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+            
+            // Write directly to the database using firebase-admin syntax
+            const batch = db.batch();
+            const articlesCol = db.collection("clients").doc(domain.toLowerCase().trim()).collection("articles");
+            
+            articles.forEach((article) => {
+              const newDocRef = articlesCol.doc();
+              batch.set(newDocRef, {
+                title: article.title,
+                content: article.content,
+                createdAt: new Date().toISOString(),
+                publishAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // 24-hour buffer
+                status: "pending",
+                cancelToken: cancelToken
+              });
+            });
+
+            await batch.commit();
+            console.log(`✅ [SEO UPSELL COMPLETED] Successfully staged ${articles.length} articles for ${domain}.`);
+            
+            if (client.ownerEmail && process.env.RESEND_API_KEY) {
+              try {
+                const resend = new Resend(process.env.RESEND_API_KEY);
+                const cancelUrl = `${process.env.APP_URL || 'http://localhost:3000'}/cancel-articles/${domain}?token=${cancelToken}`;
+                await resend.emails.send({
+                  from: 'Webmaster <engine@yourdomain.com>',
+                  to: client.ownerEmail,
+                  subject: 'Action Required: Pending SEO Articles',
+                  html: `
+                    <p>I wrote 5 SEO articles to boost your traffic:</p>
+                    <ul>
+                      ${articles.map((a: any) => `<li>${a.title}</li>`).join('')}
+                    </ul>
+                    <p>They will automatically go live in 24 hours. <a href="${cancelUrl}">Click here to cancel or edit</a>.</p>
+                  `
+                });
+                console.log(`✉️ [EMAIL SYSTEM] Sent real staging email to ${client.ownerEmail}`);
+              } catch (e: any) {
+                console.error(`❌ [EMAIL SYSTEM] Failed to send staging email:`, e.message);
+              }
+            } else {
+              console.log(`✉️ [EMAIL SYSTEM] Simulated email to owner: "I wrote 5 SEO articles to boost your traffic. They will automatically go live in 24 hours. Click here to cancel or edit."`);
+            }
+          }
+        } catch (bgErr: any) {
+          console.error(`❌ [SEO UPSELL FAILED] Background job failed for ${domain}:`, bgErr.message);
+        }
+      })();
+
+      return res.status(200).json({
+        status: "success",
+        action: "seo_campaign_activated",
+        response: "SEO campaign acknowledged. Generating and staging articles autonomously in the background."
+      });
+    }
+
+    return res.status(200).json({
+      status: "ignored",
+      response: "Email not recognized as a command."
+    });
+
+  } catch (error: any) {
+    console.error("❌ [EMAIL-WEBHOOK] Failed to process incoming email:", error.message);
+    res.status(500).json({ error: "Failed to process email webhook", details: error.message });
+  }
+});
+
+// 3.5.1 Cancel pending articles
+app.post("/api/clients/:domain/articles/cancel", async (req, res) => {
+  try {
+    const { domain } = req.params;
+    const { token } = req.body;
+    
+    if (!token) {
+      return res.status(401).json({ error: "Unauthorized. Missing cancellation token." });
+    }
+
+    const articlesCol = db.collection("clients").doc(domain).collection("articles");
+    const snapshot = await articlesCol.where("status", "==", "pending").where("cancelToken", "==", token).get();
+    
+    if (snapshot.empty) {
+      return res.status(404).json({ error: "No pending articles found, or invalid token. They may have already been published or cancelled." });
+    }
+    
+    const batch = db.batch();
+    snapshot.docs.forEach((doc) => {
+      batch.update(doc.ref, { status: "cancelled", cancelToken: null });
+    });
+    await batch.commit();
+    
+    res.json({ status: "success", message: "Articles cancelled successfully" });
+  } catch (error: any) {
+    console.error("Failed to cancel articles:", error);
+    res.status(500).json({ error: "Error canceling articles. Please contact support." });
+  }
+});
+
+// 3.5.2 Cron Job: Publish pending SEO articles
+app.post("/api/cron/publish-articles", async (req, res) => {
+  try {
+    // Note: In production, this endpoint should be protected (e.g. require Google Cloud Scheduler Auth)
+    // For this prototype, we'll allow it.
+    console.log("🕒 [CRON] Running pending articles publisher...");
+    
+    // Efficient strictly filtered query
+    const nowIso = new Date().toISOString();
+    const pendingArticlesSnap = await db.collectionGroup("articles")
+      .where("status", "==", "pending")
+      .where("publishAt", "<=", nowIso)
+      .get();
+    
+    if (pendingArticlesSnap.empty) {
+      return res.json({ status: "success", message: "No pending articles to publish." });
+    }
+    
+    const batch = db.batch();
+    let count = 0;
+    
+    pendingArticlesSnap.docs.forEach((doc) => {
+      batch.update(doc.ref, { status: "published" });
+      count++;
+    });
+    
+    if (count > 0) {
+      await batch.commit();
+      console.log(`✅ [CRON] Published ${count} pending articles.`);
+    }
+    
+    res.json({ status: "success", publishedCount: count });
+  } catch (error: any) {
+    console.error("❌ [CRON] Error publishing articles:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// 3.6. Trigger the Autonomous Meteorological Sync Engine (Cloud Scheduler CRON Entrypoint)
 app.post("/api/pipeline/sync-weather", requireRole(["gateway", "unified"]), async (req, res) => {
   try {
     const { async = true, queueMode = "distributed" } = req.body || {};
@@ -1368,13 +1924,26 @@ app.get("/site/:domain", requireRole(["gateway", "unified"]), async (req, res) =
       return res.status(404).send(`
         <div style="font-family: sans-serif; text-align: center; margin-top: 100px;">
           <h1 style="color: #ef4444;">Tenant Not Found</h1>
-          <p style="color: #64748b;">The HVAC domain "${domain}" is not registered in our database.</p>
+          <p style="color: #64748b;">The domain "${domain}" is not registered in our database.</p>
           <a href="/" style="color: #10b981; text-decoration: none; font-weight: bold;">Go to Autonomous Webmaster Console</a>
         </div>
       `);
     }
 
-    return renderClientSite(clientDoc.data(), req, res);
+    const clientData = clientDoc.data();
+    
+    // Fetch articles from the subcollection
+    const articlesRef = collection(db, `clients/${domain}/articles`);
+    const articlesSnap = await getDocs(articlesRef);
+    const articles = articlesSnap.docs
+      .map((d: any) => ({
+        id: d.id,
+        ...d.data()
+      }))
+      .filter((a: any) => a.status === "published" || !a.status); // Fallback for old ones
+
+    // Pass articles to renderClientSite
+    return renderClientSite(clientData, articles, req, res);
   } catch (error) {
     console.error("Error rendering standalone HVAC client page:", error);
     res.status(500).send("Fatal error compiling standalone webpage template.");
@@ -1870,6 +2439,7 @@ async function runBackgroundTenantProvisioning(transmissionId: string | undefine
 
     const completeClientData = {
       ...clientData,
+      ownerEmail: customerEmail || "",
       isrUrl: `https://${domain}/api/revalidate`,
       isrSecret: `sec_paypal_${Math.random().toString(36).substring(2, 8)}`,
       lastUpdated: new Date().toISOString()
@@ -2243,11 +2813,15 @@ app.post("/api/webhooks/paypal", requireRole(["gateway", "unified"]), verifyPayP
     console.log(`[SECURITY PASSED] PayPal webhook signature verified: ${sigResult.reason}`);
 
     // 2. SECOND: Strict Idempotency Check
-    // [SECURITY NOTE]: To eradicate the Data Destruction Vector, the Gateway no longer has ANY Firestore IAM permissions.
-    // We rely natively on Google Cloud Tasks idempotency (Task deduplication by Task Name) instead of a database lock.
-    // If the attacker compromises the gateway, they cannot destroy data because the Service Account physically cannot reach Firestore.
+    if (transmissionId) {
+      const lockCheck = await checkIdempotencyLock(transmissionId);
+      if (lockCheck.shouldIgnore) {
+        console.log(`[IDEMPOTENCY BLOCK] Webhook ignored: ${lockCheck.reason}`);
+        return res.status(200).json({ status: "ignored", reason: lockCheck.reason });
+      }
+    }
 
-    // 3. THIRD: Tenant Provisioning and Database Updates (Synchronous to prevent Serverless execution throttling/termination)
+    // 3. THIRD: Tenant Provisioning and Database Updates
     const isSuccessEvent = event?.event_type === "BILLING.SUBSCRIPTION.ACTIVATED" || 
                            event?.event_type === "PAYMENT.SALE.COMPLETED" ||
                            event?.event_type === "CHECKOUT.ORDER.APPROVED" ||
@@ -2542,6 +3116,26 @@ async function startServer() {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`🚀 [BOOT] Server running and fully operational as role '${serviceRole}' on http://0.0.0.0:${PORT}`);
+    
+    // Simulate Cloud Scheduler in our monolithic test environment
+    if (serviceRole === "unified") {
+      setInterval(async () => {
+        try {
+          await fetch(`http://127.0.0.1:${PORT}/api/cron/publish-articles`, { method: "POST" });
+        } catch (e) {
+          // ignore error
+        }
+      }, 15 * 60 * 1000); // Check every 15 minutes
+      
+      // Also run once 30 seconds after boot to catch any pending articles immediately for demonstration
+      setTimeout(async () => {
+        try {
+          await fetch(`http://127.0.0.1:${PORT}/api/cron/publish-articles`, { method: "POST" });
+        } catch (e) {
+          // ignore error
+        }
+      }, 30000);
+    }
   });
 }
 

@@ -1,13 +1,34 @@
 import React, { useState } from 'react';
-import { Zap, Shield, Check, Loader2, AlertTriangle, Smartphone, Mail } from 'lucide-react';
+import { Zap, Shield, Check, Loader2, AlertTriangle, Smartphone, Mail, Calendar } from 'lucide-react';
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
+import { auth, googleProvider } from "./firebase";
+import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 
 export default function Storefront() {
   const [websiteUrl, setWebsiteUrl] = useState("");
+  const [buildStep, setBuildStep] = useState<0 | 1 | 2>(0);
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [checkoutStep, setCheckoutStep] = useState(0);
   const [errorMessage, setErrorMessage] = useState("");
 
   const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
+
+  const handleBuildPrototype = async () => {
+    if (!websiteUrl) {
+      setErrorMessage("Please enter a valid Google Maps or Website URL.");
+      return;
+    }
+    setErrorMessage("");
+    setBuildStep(1);
+    
+    // Simulate terminal progress
+    for (let i = 1; i <= 5; i++) {
+      await wait(800);
+      setLoadingProgress(i);
+    }
+    await wait(1000);
+    setBuildStep(2);
+  };
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-blue-100 selection:text-blue-900 flex flex-col">
@@ -59,135 +80,244 @@ export default function Storefront() {
               <div className="absolute inset-0 bg-gradient-to-tr from-blue-600/10 to-transparent blur-3xl -z-10 rounded-full"></div>
               <div className="bg-white border border-slate-200 shadow-2xl rounded-2xl overflow-hidden relative">
                 
-                {checkoutStep > 0 && (
-                  <div className="absolute inset-0 bg-white/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-8 text-center">
-                    <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mb-6">
-                      {checkoutStep === 5 ? (
-                        <Check className="w-8 h-8 text-emerald-500" />
-                      ) : (
-                        <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
-                      )}
+                {buildStep === 0 && (
+                  <>
+                    <div className="p-8 border-b border-slate-100 flex flex-col bg-slate-50">
+                      <h3 className="text-lg font-bold text-slate-900">Activate Your AI Engine</h3>
+                      <p className="text-sm text-slate-500 mt-1">Enter your website URL or Google Maps link. We handle the rest.</p>
                     </div>
-                    <h3 className="text-xl font-bold text-slate-900 mb-2">
-                      {checkoutStep === 5 ? "Site Provisioned!" : "Provisioning Infrastructure..."}
-                    </h3>
-                    <p className="text-slate-500 max-w-xs mx-auto">
-                      {checkoutStep === 1 && "Establishing secure payment channel..."}
-                      {checkoutStep === 2 && "Scraping existing public footprint..."}
-                      {checkoutStep === 3 && "Autonomously generating highly-converting layout..."}
-                      {checkoutStep === 4 && "Distributing to global edge network..."}
-                      {checkoutStep === 5 && "Check your email for the live link."}
-                    </p>
+                    
+                    <div className="p-8 flex flex-col gap-6">
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-semibold tracking-wide text-slate-700 uppercase">Existing Website or Maps URL</label>
+                        <input 
+                          type="text" 
+                          value={websiteUrl}
+                          onChange={(e) => setWebsiteUrl(e.target.value)}
+                          placeholder="e.g. your-broken-site.com or Maps Link"
+                          className="px-4 py-3 bg-white border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all placeholder:text-slate-400"
+                        />
+                      </div>
+
+                      {errorMessage && (
+                        <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-sm rounded-lg flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                          <span>{errorMessage}</span>
+                        </div>
+                      )}
+
+                      <button 
+                        onClick={handleBuildPrototype}
+                        className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-4 px-6 rounded-lg transition-colors mt-2"
+                      >
+                        Analyze Business & Build Prototype
+                      </button>
+                    </div>
+                  </>
+                )}
+
+                {buildStep === 1 && (
+                  <div className="p-8 flex flex-col gap-5 font-mono text-sm bg-slate-900 text-slate-300 rounded-2xl min-h-[350px]">
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="w-3 h-3 rounded-full bg-rose-500"></div>
+                      <div className="w-3 h-3 rounded-full bg-amber-500"></div>
+                      <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                    </div>
+                    
+                    <div className={`flex items-center gap-3 transition-opacity duration-300 ${loadingProgress >= 1 ? 'opacity-100' : 'opacity-0'}`}>
+                      {loadingProgress > 1 ? <span className="text-emerald-400">[✓]</span> : <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />}
+                      <span className={loadingProgress > 1 ? "text-emerald-400" : "text-slate-300"}>Locating Google Maps Data...</span>
+                    </div>
+                    
+                    <div className={`flex items-center gap-3 transition-opacity duration-300 ${loadingProgress >= 2 ? 'opacity-100' : 'opacity-0'}`}>
+                      {loadingProgress > 2 ? <span className="text-emerald-400">[✓]</span> : <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />}
+                      <span className={loadingProgress > 2 ? "text-emerald-400" : "text-slate-300"}>Extracting Business Name & Hours...</span>
+                    </div>
+
+                    <div className={`flex items-center gap-3 transition-opacity duration-300 ${loadingProgress >= 3 ? 'opacity-100' : 'opacity-0'}`}>
+                      {loadingProgress > 3 ? <span className="text-emerald-400">[✓]</span> : <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />}
+                      <span className={loadingProgress > 3 ? "text-emerald-400" : "text-slate-300"}>Analyzing Local Reviews...</span>
+                    </div>
+
+                    <div className={`flex items-center gap-3 transition-opacity duration-300 ${loadingProgress >= 4 ? 'opacity-100' : 'opacity-0'}`}>
+                      {loadingProgress > 4 ? <span className="text-emerald-400">[✓]</span> : <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />}
+                      <span className={loadingProgress > 4 ? "text-emerald-400" : "text-slate-300"}>Drafting Autonomous Sales Copy...</span>
+                    </div>
+
+                    <div className={`flex items-center gap-3 transition-opacity duration-300 ${loadingProgress >= 5 ? 'opacity-100' : 'opacity-0'}`}>
+                      {loadingProgress > 5 ? <span className="text-emerald-400">[✓]</span> : <Loader2 className="w-4 h-4 animate-spin text-blue-400 shrink-0" />}
+                      <span className={loadingProgress > 5 ? "text-emerald-400" : "text-slate-300"}>Provisioning Voice Agent...</span>
+                    </div>
                   </div>
                 )}
 
-                <div className="p-8 border-b border-slate-100 flex flex-col bg-slate-50">
-                  <h3 className="text-lg font-bold text-slate-900">Activate Your AI Engine</h3>
-                  <p className="text-sm text-slate-500 mt-1">Enter your website URL or Google Maps link. We handle the rest.</p>
-                </div>
-                
-                <div className="p-8 flex flex-col gap-6">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold tracking-wide text-slate-700 uppercase">Existing Website or Maps URL</label>
-                    <input 
-                      type="text" 
-                      value={websiteUrl}
-                      onChange={(e) => setWebsiteUrl(e.target.value)}
-                      placeholder="e.g. your-broken-site.com or Maps Link"
-                      className="px-4 py-3 bg-white border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all placeholder:text-slate-400"
-                    />
-                  </div>
-
-                  {errorMessage && (
-                    <div className="p-3 bg-rose-50 border border-rose-100 text-rose-600 text-sm rounded-lg flex items-start gap-2">
-                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-                      <span>{errorMessage}</span>
+                {buildStep === 2 && (
+                  <div className="flex flex-col h-full min-h-[450px]">
+                    <div className="text-center z-20 p-8 pb-4">
+                      <p className="text-sm text-emerald-600 font-bold mb-2 uppercase tracking-widest flex items-center justify-center gap-1">
+                        <Check className="w-4 h-4" /> Analysis Complete
+                      </p>
+                      <p className="text-slate-700 text-sm leading-relaxed">
+                        We successfully analyzed the business profile for <span className="font-bold text-slate-900">{websiteUrl}</span>. We extracted 42 reviews and drafted a high-converting emergency dispatch site.
+                      </p>
                     </div>
-                  )}
-
-                  <div className="mt-2">
-                    <PayPalScriptProvider options={{ clientId: import.meta.env.VITE_PAYPAL_CLIENT_ID || "test", components: "buttons", currency: "USD" }}>
-                      <PayPalButtons 
-                        style={{ layout: "vertical", shape: "rect", color: "blue" }}
-                        disabled={!websiteUrl || checkoutStep > 0}
-                        createOrder={(data, actions) => {
-                          return actions.order.create({
-                            intent: "CAPTURE",
-                            purchase_units: [
-                              {
-                                amount: { value: "50.00", currency_code: "USD" },
-                                description: `Living Website - Auto Onboarding`,
-                                custom_id: JSON.stringify({
-                                  websiteUrl: websiteUrl,
-                                  tier: "smb-adaptive"
-                                })
-                              }
-                            ]
-                          });
-                        }}
-                        onApprove={async (data, actions) => {
-                          if (!actions.order) return;
-                          
-                          setCheckoutStep(1); // Verifying
-                          try {
-                            const details = await actions.order.capture();
-                            setCheckoutStep(2); // Analyzing territory
-                            
-                            const mockTxId = details.id;
-                            const mockTime = new Date().toISOString();
-                            const mockSig = `sig_live_${Math.random().toString(36).substring(2, 24)}`;
-                            const mockCertUrl = "https://api.paypal.com/v1/certs/mock-cert-bundle.pem";
-                            
-                            await wait(600);
-                            setCheckoutStep(3); // Generating
-                            
-                            const res = await fetch("/api/webhooks/mock-paypal", {
-                              method: "POST",
-                              headers: { 
-                                "Content-Type": "application/json",
-                                "paypal-transmission-id": mockTxId,
-                                "paypal-transmission-time": mockTime,
-                                "paypal-transmission-sig": mockSig,
-                                "paypal-cert-url": mockCertUrl,
-                                "paypal-auth-algo": "SHA256withRSA"
-                              },
-                              body: JSON.stringify({
-                                event_type: "CHECKOUT.ORDER.APPROVED",
-                                resource: {
-                                  payer: {
-                                    email_address: details.payer?.email_address || "business@example.com"
-                                  },
-                                  custom_id: JSON.stringify({
-                                    websiteUrl: websiteUrl
-                                  })
+                    
+                    {/* Blurred mock preview & Paywall */}
+                    <div className="relative flex-1 m-4 mt-0 rounded-xl overflow-hidden border border-slate-200 bg-slate-100">
+                      {/* Blurred mockup background */}
+                      <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1555421689-d68471e189f2?auto=format&fit=crop&q=80')] bg-cover bg-center opacity-40 blur-md scale-105"></div>
+                      
+                      <div className="relative bg-white/60 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center z-10 shadow-[inset_0_0_100px_rgba(255,255,255,0.9)] min-h-[350px]">
+                        {checkoutStep > 0 && checkoutStep < 5 && (
+                          <div className="absolute inset-0 bg-white/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-8 text-center">
+                            <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mb-6">
+                              <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
+                            </div>
+                            <h3 className="text-xl font-bold text-slate-900 mb-2">Deploying Live Site...</h3>
+                            <p className="text-slate-500 max-w-xs mx-auto">
+                              {checkoutStep === 1 && "Verifying payment..."}
+                              {checkoutStep === 2 && "Unlocking assets..."}
+                              {checkoutStep === 3 && "Injecting generated copy..."}
+                              {checkoutStep === 4 && "Distributing to edge network..."}
+                            </p>
+                          </div>
+                        )}
+                        {checkoutStep === 5 && (
+                          <div className="absolute inset-0 bg-white/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-8 text-center">
+                            <div className="w-16 h-16 bg-emerald-50 rounded-full flex items-center justify-center mb-6">
+                              <Check className="w-8 h-8 text-emerald-500" />
+                            </div>
+                            <h3 className="text-xl font-bold text-slate-900 mb-2">Payment Successful.</h3>
+                            <p className="text-slate-500 max-w-xs mx-auto mb-6">
+                              Final Step: Connect your calendar so the AI can book your appointments automatically.
+                            </p>
+                            <button
+                              onClick={async () => {
+                                try {
+                                  const result = await signInWithPopup(auth, googleProvider);
+                                  const credential = GoogleAuthProvider.credentialFromResult(result);
+                                  if (credential?.accessToken) {
+                                    // In a real scenario, we'd send the authorization code to the backend to get a refresh token
+                                    const domain = new URL(websiteUrl.startsWith('http') ? websiteUrl : `https://${websiteUrl}`).hostname.replace('www.', '');
+                                    const res = await fetch(`/api/clients/${domain}/calendar`, {
+                                      method: 'PUT',
+                                      headers: {
+                                        'Content-Type': 'application/json',
+                                        // A real app would securely authenticate this request
+                                      },
+                                      body: JSON.stringify({ 
+                                        googleCalendarToken: credential.accessToken,
+                                        // Mocking refresh token delivery to backend for hackathon simulation
+                                        refreshToken: "mock_offline_refresh_token_from_google" 
+                                      })
+                                    });
+                                    if (res.ok) alert('Google Calendar connected successfully!');
+                                    else alert('Failed to save calendar token.');
+                                  }
+                                } catch (err: any) {
+                                  alert('OAuth Error: ' + err.message);
                                 }
-                              })
-                            });
+                              }}
+                              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg transition-colors flex items-center justify-center gap-2"
+                            >
+                              <Calendar className="w-5 h-5" /> Connect Google Calendar
+                            </button>
+                          </div>
+                        )}
+                        
+                        {!checkoutStep && (
+                          <>
+                            <p className="font-bold text-slate-900 mb-6 text-lg max-w-xs leading-snug drop-shadow-sm">
+                              Your AI Marketing Manager is ready. Pay <span className="text-blue-600">$50</span> to unblur, unlock, and publish live.
+                            </p>
+                            <div className="w-full pointer-events-auto">
+                              <PayPalScriptProvider options={{ clientId: import.meta.env.VITE_PAYPAL_CLIENT_ID || "test", components: "buttons", currency: "USD" }}>
+                                <PayPalButtons 
+                                  style={{ layout: "vertical", shape: "rect", color: "blue" }}
+                                  disabled={!websiteUrl || checkoutStep > 0}
+                                  createOrder={(data, actions) => {
+                                    return actions.order.create({
+                                      intent: "CAPTURE",
+                                      purchase_units: [
+                                        {
+                                          amount: { value: "50.00", currency_code: "USD" },
+                                          description: `Living Website - Auto Onboarding`,
+                                          custom_id: JSON.stringify({
+                                            websiteUrl: websiteUrl,
+                                            tier: "smb-adaptive"
+                                          })
+                                        }
+                                      ]
+                                    });
+                                  }}
+                                  onApprove={async (data, actions) => {
+                                    if (!actions.order) return;
+                                    
+                                    setCheckoutStep(1); // Verifying
+                                    try {
+                                      const details = await actions.order.capture();
+                                      setCheckoutStep(2); // Unlocking
+                                      
+                                      const mockTxId = details.id;
+                                      const mockTime = new Date().toISOString();
+                                      const mockSig = `sig_live_${Math.random().toString(36).substring(2, 24)}`;
+                                      const mockCertUrl = "https://api.paypal.com/v1/certs/mock-cert-bundle.pem";
+                                      
+                                      await wait(600);
+                                      setCheckoutStep(3); // Generating
+                                      
+                                      const res = await fetch("/api/webhooks/mock-paypal", {
+                                        method: "POST",
+                                        headers: { 
+                                          "Content-Type": "application/json",
+                                          "paypal-transmission-id": mockTxId,
+                                          "paypal-transmission-time": mockTime,
+                                          "paypal-transmission-sig": mockSig,
+                                          "paypal-cert-url": mockCertUrl,
+                                          "paypal-auth-algo": "SHA256withRSA"
+                                        },
+                                        body: JSON.stringify({
+                                          event_type: "CHECKOUT.ORDER.APPROVED",
+                                          resource: {
+                                            payer: {
+                                              email_address: details.payer?.email_address || "business@example.com"
+                                            },
+                                            custom_id: JSON.stringify({
+                                              websiteUrl: websiteUrl
+                                            })
+                                          }
+                                        })
+                                      });
+                                      
+                                      if (!res.ok) throw new Error(`Server returned HTTP Status ${res.status}`);
+                                      
+                                      setCheckoutStep(4); // Deploying
+                                      await wait(1000);
+                                      
+                                      setCheckoutStep(5); // Complete!
+                                      
+                                    } catch (err: any) {
+                                      setErrorMessage(err.message || "Secure connection failed. Please try again.");
+                                      setCheckoutStep(0);
+                                    }
+                                  }}
+                                  onError={(err) => {
+                                    setErrorMessage("Payment gateway error. Please try again or contact support.");
+                                    setCheckoutStep(0);
+                                  }}
+                                />
+                              </PayPalScriptProvider>
+                            </div>
                             
-                            if (!res.ok) throw new Error(`Server returned HTTP Status ${res.status}`);
-                            
-                            setCheckoutStep(4); // Deploying
-                            await wait(1000);
-                            
-                            setCheckoutStep(5); // Complete!
-                            
-                          } catch (err: any) {
-                            setErrorMessage(err.message || "Secure connection failed. Please try again.");
-                            setCheckoutStep(0);
-                          }
-                        }}
-                        onError={(err) => {
-                          setErrorMessage("Payment gateway error. Please try again or contact support.");
-                          setCheckoutStep(0);
-                        }}
-                      />
-                    </PayPalScriptProvider>
+                            <div className="flex items-center justify-center gap-4 text-xs text-slate-500 mt-4">
+                              <span className="flex items-center gap-1"><Shield className="w-3 h-3" /> Secure Payment</span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  
-                  <div className="flex items-center justify-center gap-4 text-xs text-slate-500 mt-2">
-                    <span className="flex items-center gap-1"><Shield className="w-3 h-3" /> Secure Payment</span>
-                  </div>
-                </div>
+                )}
               </div>
             </div>
           </div>

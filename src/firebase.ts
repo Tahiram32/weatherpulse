@@ -1,5 +1,6 @@
 import { initializeApp } from "firebase/app";
 import { getFirestore } from "firebase/firestore";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import config from "../firebase-applet-config.json";
 
 const firebaseConfig = {
@@ -12,4 +13,12 @@ const firebaseConfig = {
 };
 
 export const firebaseApp = initializeApp(firebaseConfig);
-export const db = getFirestore(firebaseApp, import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || config.firestoreDatabaseId || "(default)");
+export const db = getFirestore(firebaseApp, import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || (config as any).firestoreDatabaseId || "(default)");
+export const auth = getAuth(firebaseApp);
+export const googleProvider = new GoogleAuthProvider();
+googleProvider.addScope("https://www.googleapis.com/auth/calendar.events");
+googleProvider.addScope("https://www.googleapis.com/auth/calendar.readonly");
+googleProvider.setCustomParameters({
+  prompt: 'consent',
+  access_type: 'offline'
+});

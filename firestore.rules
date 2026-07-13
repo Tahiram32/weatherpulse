@@ -4,6 +4,15 @@ service cloud.firestore {
     match /clients/{domain} {
       allow read: if true;
       allow write: if false;
+      
+      match /private/{document=**} {
+        allow read, write: if false; // Only accessible via firebase-admin
+      }
+      
+      match /articles/{document=**} {
+        allow read: if true;
+        allow write: if false;
+      }
     }
     match /runs/{runId} {
       allow read: if true;

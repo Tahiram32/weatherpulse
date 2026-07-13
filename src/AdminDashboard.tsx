@@ -23,13 +23,14 @@ import {
   Check,
   Cpu,
   ArrowRight,
-  Sparkles, Users, Terminal,
+  Sparkles, Users,
   Info
 } from "lucide-react";
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { HVACClient, PipelineRun, PipelineLog } from "./types";
-import { db } from "./firebase";
+import { db, auth, googleProvider } from "./firebase";
 import { collection, onSnapshot, query } from "firebase/firestore";
+import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 
 export default function AdminDashboard() {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -1482,9 +1483,37 @@ exports.weatherWebmasterPipeline = async (req, res) => {
                     <span className="text-slate-500">Territory:</span>
                     <span className="text-slate-700">{selectedClient.city}</span>
                   </div>
-                  <div className="flex justify-between">
+                  <div className="flex justify-between mb-1.5">
                     <span className="text-slate-500">Cache Status:</span>
                     <span className="text-blue-600 font-semibold">Active ISR</span>
+                  </div>
+                  <div className="flex justify-between items-center border-t border-slate-200 pt-1.5 mt-1.5">
+                    <span className="text-slate-500">Google Calendar:</span>
+                    <button 
+                      onClick={async () => {
+                        try {
+                          const result = await signInWithPopup(auth, googleProvider);
+                          const credential = GoogleAuthProvider.credentialFromResult(result);
+                          if (credential?.accessToken) {
+                            const res = await fetch(`/api/clients/${selectedClient.domain}/calendar`, {
+                              method: 'PUT',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': `Bearer ${ADMIN_API_KEY}`
+                              },
+                              body: JSON.stringify({ googleCalendarToken: credential.accessToken })
+                            });
+                            if (res.ok) alert('Google Calendar connected successfully!');
+                            else alert('Failed to save calendar token.');
+                          }
+                        } catch (err: any) {
+                          alert('OAuth Error: ' + err.message);
+                        }
+                      }}
+                      className="text-xs bg-blue-50 text-blue-600 border border-blue-200 hover:bg-blue-100 font-medium py-1 px-3 rounded-md transition-colors"
+                    >
+                      Connect Calendar
+                    </button>
                   </div>
                   {selectedClient.lastUpdated && (
                     <div className="flex justify-between border-t border-slate-200 pt-1.5 mt-1.5 text-xs">

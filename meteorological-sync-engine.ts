@@ -198,13 +198,17 @@ const weatherCopySchema = {
       items: { type: Type.STRING },
       description: "List of 2 to 3 seasonal or crisis-based deals (e.g., '$49 Emergency Freeze Assessment')."
     },
+    emergencyRoutingMode: {
+      type: Type.BOOLEAN,
+      description: "True if weather is extreme and AI should prioritize high-margin emergency services over low-margin routine work."
+    },
     cacheTags: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
       description: "List of custom Edge cache tag invalidation targets (e.g. ['weather-update', 'homepage'])."
     }
   },
-  required: ["heroTitle", "heroSubtitle", "alertBanner", "seoHeading", "seoArticle", "promotions", "cacheTags"]
+  required: ["heroTitle", "heroSubtitle", "alertBanner", "seoHeading", "seoArticle", "promotions", "emergencyRoutingMode", "cacheTags"]
 };
 
 // Helper: Stagger/Delay utility
@@ -828,12 +832,14 @@ export function generateLocalCopyFallback(weather: any, client: any): any {
   let sHeading = `Reliable ${vertical} for Any Weather in ${client.city}`;
   let sArticle = `At ${client.businessName}, we specialize in delivering professional, dependable ${vertical.toLowerCase()} solutions tailored to the unique climate challenges of ${client.city}. Our team of skilled experts is on-call 24/7 to safeguard your home and business against unexpected shifts in temperature, humidity, and atmospheric conditions. From routine preventative maintenance to immediate emergency support, trust us to protect your property and keep your systems running at peak performance. Fully licensed, insured, and locally trusted.`;
   let promoList = [`$50 Initial Dispatch Discount`, `Free Multi-Point Professional Inspection`];
+  let emergencyRoutingMode = false;
 
   if (isExtreme) {
     hTitle = `URGENT ALERT: Emergency ${vertical} Dispatch from ${client.businessName}!`;
     hSub = `Severe meteorological conditions active in ${client.city}. Call dispatch at ${client.phone} for immediate assistance: ${emergencyFocus}.`;
     alertText = `⚠️ WEATHER ALERT ACTIVE: Priority dispatch is online for local families and businesses.`;
-    promoList = [`$39 Emergency Diagnostic Dispatch`, `Priority Dispatch Access`];
+    promoList = [`Emergency Diagnostic Dispatch`, `Priority Dispatch Access`];
+    emergencyRoutingMode = true;
   }
 
   return {
@@ -843,6 +849,7 @@ export function generateLocalCopyFallback(weather: any, client: any): any {
     seoHeading: sHeading,
     seoArticle: sArticle,
     promotions: promoList,
+    emergencyRoutingMode,
     cacheTags: ["weather-update", "homepage", vertical.toLowerCase()]
   };
 }
@@ -894,6 +901,7 @@ export async function executeSingleClientSyncTask(domain: string, weather: any, 
           1. If Extreme Weather is true OR if any of the Monitored Conditions are met, make the heroTitle and alertBanner intense, immediate, and direct. Target the copy specifically to the "${vertical}" vertical, addressing "${emergencyFocus}" to convert concerned visitors into immediate bookings.
           2. Keep promotions highly realistic, practical, and customized for a local "${vertical}" business.
           3. Write a premium, high-converting educational seoArticle of exactly 120-150 words that integrates both weather conditions and "${vertical}"-specific SEO keywords organically.
+          4. NEVER raise prices during an emergency (price gouging is illegal). Instead, if Extreme Alert Active is YES, set emergencyRoutingMode to true and adjust the 'promotions' array to ONLY feature high-margin emergency packages (e.g., 'Emergency Diagnostic Dispatch', 'Priority Water Extraction') and remove low-margin routine services. If normal weather, emergencyRoutingMode is false.
         `;
 
         const result = await generateContentWithRetry(ai, {
@@ -926,6 +934,7 @@ export async function executeSingleClientSyncTask(domain: string, weather: any, 
           promotions: Array.isArray(parsed.promotions) && parsed.promotions.length > 0 
             ? parsed.promotions 
             : ["$50 Initial Dispatch Discount", "Free Professional Property Checkup"],
+          emergencyRoutingMode: parsed.emergencyRoutingMode || false,
           cacheTags: Array.isArray(parsed.cacheTags) && parsed.cacheTags.length > 0
             ? parsed.cacheTags
             : ["weather-update", "homepage", vertical.toLowerCase()]

@@ -28,6 +28,7 @@ export interface HVACClient {
   themeColor?: string; // e.g. "blue", "emerald", "amber", "red", "cyan", "slate", "purple", "orange"
   icon?: string; // e.g. "wind", "droplets", "thermometer", "sun", "snowflake", "shield", "home", "wrench"
   lastUpdated?: string;
+  syndicateEnabled?: boolean;
   lastWeatherCopy?: WeatherCopy;
   lastTelemetry?: {
     temp: number;
