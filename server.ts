@@ -239,6 +239,7 @@ const ai = new GoogleGenAI({
   },
 });
 const app = express();
+app.set("trust proxy", 1); // Respect Cloud Run proxy headers for accurate IP rate limiting
 const ADMIN_API_KEY = process.env.ADMIN_API_KEY || "nexus2026";
 function requireAdminAuth(req: any, res: any, next: any) {
   // Allow site resolution for edge routing without auth
@@ -1824,11 +1825,13 @@ app.post("/api/cron/weekly-value-receipt", async (req, res) => {
     const clientsSnapshot = await db.collection("clients").get();
     const now = Timestamp.now().toDate();
     const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const dateOptions = { timeZone: 'UTC', month: 'short', day: 'numeric' };
-    const dateString = `${oneWeekAgo.toLocaleDateString('en-US', dateOptions)} - ${now.toLocaleDateString('en-US', dateOptions)}`;
     for (const doc of clientsSnapshot.docs) {
       const client = doc.data();
       if (!client.email) continue;
+      
+      const clientTimeZone = client.timezone || "America/Los_Angeles";
+      const dateOptions = { timeZone: clientTimeZone, month: 'short', day: 'numeric' };
+      const dateString = `${oneWeekAgo.toLocaleDateString('en-US', dateOptions)} - ${now.toLocaleDateString('en-US', dateOptions)}`;
       const domain = doc.id;
       const callsQuery = await db
         .collection("clients")
