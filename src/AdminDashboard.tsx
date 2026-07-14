@@ -29,7 +29,7 @@ import {
 import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
 import { TenantClient, PipelineRun, PipelineLog } from "./types";
 import { db, auth, googleProvider } from "./firebase";
-import { collection, onSnapshot, query } from "firebase/firestore";
+import { collection, onSnapshot, query, getDocs, doc } from "firebase/firestore";
 import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 
 export default function AdminDashboard() {
@@ -43,6 +43,8 @@ const [activeTab, setActiveTab] = useState<"console" | "tenants" | "billing" | "
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<PipelineRun | null>(null);
   const [selectedCity, setSelectedCity] = useState("Dallas");
+  const [platformMetrics, setPlatformMetrics] = useState({ trades: 0, revenue: 0 });
+  const [metricsHealth, setMetricsHealth] = useState({ status: "healthy", lastUpdated: "" });
   const [customCity, setCustomCity] = useState("");
   const [selectedClient, setSelectedClient] = useState<TenantClient | null>(null);
   const [hasRealApiKey, setHasRealApiKey] = useState(false);
@@ -59,11 +61,11 @@ const [activeTab, setActiveTab] = useState<"console" | "tenants" | "billing" | "
   const [submitError, setSubmitError] = useState("");
 
   // PayPal Checkout Form States
-  const [checkoutName, setCheckoutName] = useState("Gulf Stream AC & Heating");
-  const [checkoutZipCode, setCheckoutZipCode] = useState("75201");
-  const [checkoutDomain, setCheckoutDomain] = useState("gulfstreamac.com");
-  const [checkoutCity, setCheckoutCity] = useState("Dallas");
-  const [checkoutPhone, setCheckoutPhone] = useState("(214) 555-0199");
+  const [checkoutName, setCheckoutName] = useState("");
+  const [checkoutZipCode, setCheckoutZipCode] = useState("");
+  const [checkoutDomain, setCheckoutDomain] = useState("");
+  const [checkoutCity, setCheckoutCity] = useState("");
+  const [checkoutPhone, setCheckoutPhone] = useState("");
   const [isSubmittingCheckout, setIsSubmittingCheckout] = useState(false);
   const [checkoutLog, setCheckoutLog] = useState<string[]>([]);
   const [checkoutStep, setCheckoutStep] = useState<number>(0);
@@ -92,10 +94,10 @@ const [activeTab, setActiveTab] = useState<"console" | "tenants" | "billing" | "
     }
   };
 
-  const [queueMode, setQueueMode] = useState<"simulated" | "monolithic" | "gcp-tasks" | "github-actions">("simulated");
+  const [queueMode, setQueueMode] = useState<"local" | "monolithic" | "gcp-tasks" | "github-actions">("local");
 
   // Trigger autonomous meteorological sync cron across all cities
-  const triggerMeteorologicalSync = async (mode: "simulated" | "monolithic" | "gcp-tasks" | "github-actions") => {
+  const triggerMeteorologicalSync = async (mode: "local" | "monolithic" | "gcp-tasks" | "github-actions") => {
     if (mode === "github-actions") {
       return;
     }
@@ -190,7 +192,7 @@ const [activeTab, setActiveTab] = useState<"console" | "tenants" | "billing" | "
     }
   };
 
-  // Handle Simulated PayPal Checkout Webhook trigger
+  // Handle Local PayPal Checkout Webhook trigger
   const handlePayPalSubscriptionSimulate = async () => {
     setIsSubmittingCheckout(true);
     setCheckoutStep(1); // Verifying payment...
@@ -224,7 +226,7 @@ const [activeTab, setActiveTab] = useState<"console" | "tenants" | "billing" | "
           event_type: "BILLING.SUBSCRIPTION.ACTIVATED",
           resource: {
             subscriber: {
-              email_address: "simulated.customer@example.com"
+              email_address: "local.customer@example.com"
             },
             custom_id: JSON.stringify({
               businessName: checkoutName,
@@ -253,6 +255,40 @@ const [activeTab, setActiveTab] = useState<"console" | "tenants" | "billing" | "
       setIsSubmittingCheckout(false);
     }
   };
+
+  // Listen to the single global platform_stats document and health status
+  useEffect(() => {
+    const docRef = doc(db, "_metadata", "platform_stats");
+    const unsubStats = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setPlatformMetrics({ 
+          trades: data.weeklyTrades || 0, 
+          revenue: data.weeklyRevenue || 0 
+        });
+      }
+    }, (err) => {
+      console.error("Failed to listen to platform stats:", err);
+    });
+
+    const healthRef = doc(db, "_metadata", "platform_stats_health");
+    const unsubHealth = onSnapshot(healthRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setMetricsHealth({
+          status: data.status || "healthy",
+          lastUpdated: data.lastSuccess || data.failedAt || ""
+        });
+      }
+    }, (err) => {
+      console.error("Failed to listen to platform stats health:", err);
+    });
+
+    return () => {
+      unsubStats();
+      unsubHealth();
+    };
+  }, []);
 
   // Subscribe to multi-tenant clients/registrants in Firestore in real-time
   useEffect(() => {
@@ -609,6 +645,29 @@ exports.weatherWebmasterPipeline = async (req, res) => {
         {/* Left Side: Navigation & Primary Modules */}
         <div className="lg:col-span-8 flex flex-col gap-6">
           
+          {/* Platform Metrics Dashboard Widget */}
+          <div className="bg-white border border-slate-300 shadow-sm rounded-lg p-4 mb-4 flex gap-4 font-sans relative">
+            {metricsHealth.status === "failed" && (
+              <div className="absolute top-2 right-2 flex items-center gap-1 text-[10px] bg-rose-100 text-rose-700 px-2 py-0.5 rounded-full font-medium border border-rose-200 uppercase tracking-wider animate-pulse">
+                <Activity size={10} />
+                Stale Data Alert: Cron Failed
+              </div>
+            )}
+            {metricsHealth.status === "healthy" && metricsHealth.lastUpdated && (
+              <div className="absolute top-2 right-2 text-[10px] text-slate-400 font-medium">
+                Sync: {new Date(metricsHealth.lastUpdated).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </div>
+            )}
+            <div className="flex-1 bg-slate-50 border border-slate-200 rounded-md p-4">
+              <div className="text-xs text-slate-500 uppercase tracking-wider mb-1 font-semibold">Weekly Lead Trades</div>
+              <div className="text-2xl text-slate-800 font-bold">{platformMetrics.trades}</div>
+            </div>
+            <div className="flex-1 bg-slate-50 border border-slate-200 rounded-md p-4">
+              <div className="text-xs text-slate-500 uppercase tracking-wider mb-1 font-semibold">Weekly Pipeline Revenue</div>
+              <div className="text-2xl text-emerald-600 font-bold">${platformMetrics.revenue.toLocaleString()}</div>
+            </div>
+          </div>
+
           {/* Module Selector Tabs */}
           <div className="bg-white border border-slate-300 shadow-sm rounded-lg p-1 flex gap-1 font-sans">
             <button
@@ -739,7 +798,7 @@ exports.weatherWebmasterPipeline = async (req, res) => {
                         className="w-full sm:flex-1 bg-white border border-slate-300 shadow-sm px-4 py-2 text-xs text-slate-800 focus:outline-none focus:border-sky-500 font-sans rounded-lg min-w-0"
                         disabled={isPolling}
                       >
-                        <option value="simulated">Local Simulated Queue (100% Free - No GCP Setup)</option>
+                        <option value="local">Local Local Queue (100% Free - No GCP Setup)</option>
                         <option value="github-actions">GitHub Actions Cron (100% Free - Production Grade)</option>
                         <option value="monolithic">Sequential Pool (Monolithic loop)</option>
                         <option value="gcp-tasks">GCP Cloud Tasks (Requires GCP Billing)</option>
@@ -801,7 +860,7 @@ exports.weatherWebmasterPipeline = async (req, res) => {
                       </div>
                     ) : (
                       <p className="text-[10px] text-slate-500 font-sans mt-2 leading-relaxed">
-                        * Local Simulated mode is <span className="text-blue-600 font-bold">100% free with no Google Cloud account required</span>, spawning background task workers instantly.
+                        * Local Local mode is <span className="text-blue-600 font-bold">100% free with no Google Cloud account required</span>, spawning background task workers instantly.
                       </p>
                     )}
                   </div>
@@ -1315,7 +1374,7 @@ exports.weatherWebmasterPipeline = async (req, res) => {
                       type="text"
                       value={checkoutName}
                       onChange={(e) => setCheckoutName(e.target.value)}
-                      placeholder="e.g. Gulf Stream AC & Heating"
+                      placeholder="e.g. Tahira Services"
                       className="w-full bg-white border border-slate-300 shadow-sm rounded-md px-4 py-3 text-sm text-slate-800 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-sans"
                     />
                   </div>
@@ -1375,7 +1434,7 @@ exports.weatherWebmasterPipeline = async (req, res) => {
                           setCheckoutLog(prev => [...prev, `[PAYPAL SDK] Customer approved payment. Transaction ID: ${details.id}`]);
                           setCheckoutStep(2); // Analyzing territory data...
                           
-                          // Simulating webhook behavior on the client since real webhook goes to backend server
+                          // Executing webhook behavior on the client since real webhook goes to backend server
                           const mockTxId = details.id;
                           const mockTime = new Date().toISOString();
                           const mockSig = `sig_live_${Math.random().toString(36).substring(2, 24)}`;

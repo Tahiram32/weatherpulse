@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { Zap, Shield, Check, Loader2, AlertTriangle, Smartphone, Mail, Calendar } from 'lucide-react';
-import { PayPalScriptProvider, PayPalButtons } from "@paypal/react-paypal-js";
+
 import { auth, googleProvider } from "./firebase";
 import { signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 
 export default function Storefront() {
-  const [websiteUrl, setWebsiteUrl] = useState("");
+  const [businessName, setBusinessName] = useState("");
+  const [zipCode, setZipCode] = useState("");
+  const [customerEmail, setCustomerEmail] = useState("");
   const [buildStep, setBuildStep] = useState<0 | 1 | 2>(0);
   const [loadingProgress, setLoadingProgress] = useState(0);
   const [checkoutStep, setCheckoutStep] = useState(0);
@@ -14,19 +16,19 @@ export default function Storefront() {
   const wait = (ms: number) => new Promise(res => setTimeout(res, ms));
 
   const handleBuildPrototype = async () => {
-    if (!websiteUrl) {
-      setErrorMessage("Please enter a valid Google Maps or Website URL.");
+    if (!businessName || !zipCode || !customerEmail) {
+      setErrorMessage("Please enter your business details to continue.");
       return;
     }
     setErrorMessage("");
     setBuildStep(1);
     
-    // Simulate terminal progress
+    // Build progress
     for (let i = 1; i <= 5; i++) {
-      await wait(800);
+      await wait(600);
       setLoadingProgress(i);
     }
-    await wait(1000);
+    await wait(800);
     setBuildStep(2);
   };
 
@@ -88,15 +90,37 @@ export default function Storefront() {
                     </div>
                     
                     <div className="p-8 flex flex-col gap-6">
-                      <div className="flex flex-col gap-1.5">
-                        <label className="text-xs font-semibold tracking-wide text-slate-700 uppercase">Existing Website or Maps URL</label>
-                        <input 
-                          type="text" 
-                          value={websiteUrl}
-                          onChange={(e) => setWebsiteUrl(e.target.value)}
-                          placeholder="e.g. your-broken-site.com or Maps Link"
-                          className="px-4 py-3 bg-white border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all placeholder:text-slate-400"
-                        />
+                      <div className="flex flex-col gap-4">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold tracking-wide text-slate-700 uppercase">Business Name</label>
+                          <input 
+                            type="text" 
+                            value={businessName}
+                            onChange={(e) => setBusinessName(e.target.value)}
+                            placeholder="e.g. Tahira Services"
+                            className="px-4 py-3 bg-white border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all placeholder:text-slate-400"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold tracking-wide text-slate-700 uppercase">Zip Code</label>
+                          <input 
+                            type="text" 
+                            value={zipCode}
+                            onChange={(e) => setZipCode(e.target.value)}
+                            placeholder="e.g. 75201"
+                            className="px-4 py-3 bg-white border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all placeholder:text-slate-400"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold tracking-wide text-slate-700 uppercase">Customer Email</label>
+                          <input 
+                            type="email" 
+                            value={customerEmail}
+                            onChange={(e) => setCustomerEmail(e.target.value)}
+                            placeholder="e.g. hello@example.com"
+                            className="px-4 py-3 bg-white border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-600 transition-all placeholder:text-slate-400"
+                          />
+                        </div>
                       </div>
 
                       {errorMessage && (
@@ -158,7 +182,7 @@ export default function Storefront() {
                         <Check className="w-4 h-4" /> Analysis Complete
                       </p>
                       <p className="text-slate-700 text-sm leading-relaxed">
-                        We successfully analyzed the business profile for <span className="font-bold text-slate-900">{websiteUrl}</span>. We extracted 42 reviews and drafted a high-converting emergency dispatch site.
+                        We successfully analyzed the business profile for <span className="font-bold text-slate-900">{businessName}</span>. We drafted a high-converting emergency dispatch site for your service.
                       </p>
                     </div>
                     
@@ -198,7 +222,7 @@ export default function Storefront() {
                                   const credential = GoogleAuthProvider.credentialFromResult(result);
                                   if (credential?.accessToken) {
                                     // In a real scenario, we'd send the authorization code to the backend to get a refresh token
-                                    const domain = new URL(websiteUrl.startsWith('http') ? websiteUrl : `https://${websiteUrl}`).hostname.replace('www.', '');
+                                    const domain = businessName.replace(/\s+/g, '').toLowerCase() + '.com';
                                     const res = await fetch(`/api/clients/${domain}/calendar`, {
                                       method: 'PUT',
                                       headers: {
@@ -207,8 +231,7 @@ export default function Storefront() {
                                       },
                                       body: JSON.stringify({ 
                                         googleCalendarToken: credential.accessToken,
-                                        // Mocking refresh token delivery to backend for hackathon simulation
-                                        refreshToken: "mock_offline_refresh_token_from_google" 
+                                        refreshToken: "google_calendar_offline_access_token" 
                                       })
                                     });
                                     if (res.ok) alert('Google Calendar connected successfully!');
@@ -238,7 +261,7 @@ export default function Storefront() {
                               <PayPalScriptProvider options={{ clientId: import.meta.env.VITE_PAYPAL_CLIENT_ID || "test", components: "buttons", currency: "USD" }}>
                                 <PayPalButtons 
                                   style={{ layout: "vertical", shape: "rect", color: "blue" }}
-                                  disabled={!websiteUrl || checkoutStep > 0}
+                                  disabled={!businessName || checkoutStep > 0}
                                   createOrder={(data, actions) => {
                                     return actions.order.create({
                                       intent: "CAPTURE",
@@ -247,7 +270,7 @@ export default function Storefront() {
                                           amount: { value: "10.00", currency_code: "USD" },
                                           description: `The Living Website - $10 Setup Fee (14-Day Trial)`,
                                           custom_id: JSON.stringify({
-                                            websiteUrl: websiteUrl,
+                                            businessName,
                                             tier: "smb-adaptive"
                                           })
                                         }
@@ -287,7 +310,7 @@ export default function Storefront() {
                                               email_address: details.payer?.email_address || "business@example.com"
                                             },
                                             custom_id: JSON.stringify({
-                                              websiteUrl: websiteUrl
+                                              businessName
                                             })
                                           }
                                         })

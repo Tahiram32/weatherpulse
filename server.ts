@@ -92,7 +92,7 @@ if (isProduction && !isSandboxEnv) {
       // Repair escaped PEM formatting safely and resiliently
       serviceAccount.private_key = serviceAccount.private_key.replace(
         /\\n/g,
-        "\n",
+        "\\n",
       );
       adminApp =
         getApps().length === 0
@@ -549,7 +549,7 @@ function renderClientSite(client: any, articles: any[], req: any, res: any) {
   const safeCity = escapeHtml(client.city);
   const safePhone = escapeHtml(client.phone);
   const safePhoneUrl = client.phone
-    ? String(client.phone).replace(/\D/g, "")
+    ? String(client.phone).replace(/\\D/g, "")
     : "";
   const safeHeroTitle = escapeHtml(copy.heroTitle);
   const safeHeroSubtitle = escapeHtml(copy.heroSubtitle);
@@ -1266,6 +1266,24 @@ app.post(
           .update({
             lead_credits: (targetCompetitor.lead_credits || 1) - 1,
           });
+          
+        // Increment Client Stats (O(1) updates)
+        await db.collection("clients").doc(sourceDomain).update({
+          weeklyTrades: admin.firestore.FieldValue.increment(1),
+          weeklyReferralFees: admin.firestore.FieldValue.increment(50)
+        });
+        
+        // Increment Global Platform Stats (O(1) update)
+        try {
+          await db.collection("_metadata").doc("platform_stats").update({
+            weeklyTrades: admin.firestore.FieldValue.increment(1)
+          });
+        } catch(e) {
+          await db.collection("_metadata").doc("platform_stats").set({
+            weeklyTrades: 1,
+            weeklyRevenue: 0
+          }, { merge: true });
+        }
       } catch (e) {
         console.warn("Could not log to syndicate_ledger", e.message);
       }
@@ -1285,13 +1303,31 @@ app.post(
     }
   },
 );
-const voiceRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // Limit each IP to 10 requests per window
-  message: {
-    error: "Too many voice interactions from this IP, please try again later.",
-  },
-});
+const voiceIpMap = new Map<string, { count: number; timestamp: number }>();
+const voiceRateLimiter = (req: any, res: any, next: any) => {
+  const ip = req.ip || req.headers['x-forwarded-for'] || req.connection?.remoteAddress || 'unknown';
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  
+  const record = voiceIpMap.get(ip as string);
+  if (!record) {
+    voiceIpMap.set(ip as string, { count: 1, timestamp: now });
+    return next();
+  }
+  
+  if (now - record.timestamp > windowMs) {
+    voiceIpMap.set(ip as string, { count: 1, timestamp: now });
+    return next();
+  }
+  
+  if (record.count >= 10) {
+    return res.status(429).json({ error: "Too many voice interactions from this IP, please try again later." });
+  }
+  
+  record.count += 1;
+  voiceIpMap.set(ip as string, record);
+  return next();
+};
 app.post(
   "/api/webhooks/voice",
   voiceRateLimiter,
@@ -1510,8 +1546,7 @@ app.post(
       However, our AI Syndicate has negotiated a real-time transfer to our trusted local partner, ${syndicateTrade.targetAgentName}.
       You MUST inform the user: "${client.businessName} is currently at full capacity, but because this is an emergency, I have immediately dispatched our trusted partner, ${syndicateTrade.targetAgentName}, to your location. They will email you shortly."`
           : zeroPartnersFound
-            ? `🚨 CRITICAL OVERRIDE 🚨: We are currently fully booked and our partner network in your area is at capacity.
-      You MUST inform the user: "We are currently fully booked and our partner network in your area is at capacity. However, I have placed you at the top of our priority waitlist. Our manager will text you the second a slot opens."`
+            ? `[SYSTEM INSTRUCTION: The partner network is currently at capacity. Inform the user they are added to the priority waitlist and maintain a helpful, conversational tone for any follow-up questions].`
             : ""
       }
       CRITICAL INSTRUCTIONS TO PREVENT HUMAN HANG-UP:
@@ -1570,6 +1605,24 @@ app.post(
             timestamp: new Date().toISOString(),
             callerNumber: callerNumber || "Unknown",
           });
+          
+        // Increment Client Stats (O(1) updates)
+        await db.collection("clients").doc(domain.toLowerCase().trim()).update({
+          weeklyCalls: admin.firestore.FieldValue.increment(1),
+          weeklyRevenue: admin.firestore.FieldValue.increment(150)
+        });
+        
+        // Increment Global Platform Stats (O(1) update)
+        try {
+          await db.collection("_metadata").doc("platform_stats").update({
+            weeklyRevenue: admin.firestore.FieldValue.increment(150)
+          });
+        } catch(e) {
+          await db.collection("_metadata").doc("platform_stats").set({
+            weeklyTrades: 0,
+            weeklyRevenue: 150
+          }, { merge: true });
+        }
       } catch (logErr: any) {
         console.warn("Failed to log voice call:", logErr.message);
       }
@@ -1822,6 +1875,9 @@ app.post("/api/cron/weekly-value-receipt", async (req, res) => {
         .json({ error: "Unauthorized. Invalid secure worker token." });
     }
     console.log("📅 [CRON] Running Weekly Value Receipt job...");
+    
+
+
     const clientsSnapshot = await db.collection("clients").get();
     const now = Timestamp.now().toDate();
     const oneWeekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -1833,33 +1889,21 @@ app.post("/api/cron/weekly-value-receipt", async (req, res) => {
       const dateOptions = { timeZone: clientTimeZone, month: 'short', day: 'numeric' };
       const dateString = `${oneWeekAgo.toLocaleDateString('en-US', dateOptions)} - ${now.toLocaleDateString('en-US', dateOptions)}`;
       const domain = doc.id;
-      const callsQuery = await db
-        .collection("clients")
-        .doc(domain)
-        .collection("voice_logs")
-        .where("timestamp", ">=", oneWeekAgo.toISOString())
-        .get();
-      const numCalls = callsQuery.size;
-      const appointmentsQuery = await db
-        .collection("clients")
-        .doc(domain)
-        .collection("appointments")
-        .where("createdAt", ">=", oneWeekAgo.toISOString())
-        .get();
-      let revenue = 0;
-      appointmentsQuery.forEach((a) => {
-        revenue += a.data().value || 150;
+      
+      // Read O(1) incrementing counters from the client document directly
+      const numCalls = client.weeklyCalls || 0;
+      const revenue = client.weeklyRevenue || 0;
+      const numTraded = client.weeklyTrades || 0;
+      const referralFees = client.weeklyReferralFees || 0;
+      
+      // Reset the weekly counters for this client
+      await db.collection("clients").doc(domain).update({
+        weeklyCalls: 0,
+        weeklyRevenue: 0,
+        weeklyTrades: 0,
+        weeklyReferralFees: 0
       });
-      const syndicateQuery = await db
-        .collection("syndicate_ledger")
-        .where("sourceDomain", "==", domain)
-        .where("timestamp", ">=", oneWeekAgo.toISOString())
-        .get();
-      const numTraded = syndicateQuery.size;
-      let referralFees = 0;
-      syndicateQuery.forEach((s) => {
-        referralFees += s.data().feeEarned || 50;
-      });
+
       const resend = new Resend(process.env.RESEND_API_KEY || "dummy");
       if (!process.env.RESEND_API_KEY) {
         console.log(
@@ -1885,12 +1929,93 @@ app.post("/api/cron/weekly-value-receipt", async (req, res) => {
       });
       console.log(`✅ [CRON] Sent Weekly Value Receipt to ${client.email}`);
     }
+
+
     res.json({ status: "success", message: "Weekly Value Receipts sent." });
   } catch (err) {
     console.error("❌ [CRON] Error sending Weekly Value Receipts:", err);
     res.status(500).json({ error: "Failed to send weekly receipts." });
   }
 });
+
+// 3.5.4 Cron Job: Aggregate Platform Stats
+app.post("/api/cron/platform-stats", async (req, res) => {
+  try {
+    const expectedSecret =
+      process.env.TASK_WORKER_SECRET || "sec_default_task_secret";
+    const authHeader = req.headers.authorization;
+    const taskSecretHeader = req.headers["x-task-worker-secret"];
+    if (
+      authHeader !== `Bearer ${expectedSecret}` &&
+      taskSecretHeader !== expectedSecret
+    ) {
+      console.warn("🚨 [SECURITY] Unauthorized attempt to invoke platform-stats cron.");
+      return res.status(401).json({ error: "Unauthorized. Invalid secure worker token." });
+    }
+    console.log("📊 [CRON] Running Platform Stats Aggregation job...");
+    
+    const oneWeekAgo = new Date();
+    oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+
+    // Get all trades in the last week
+    const syndicateSnap = await db.collection("syndicate_ledger")
+      .where("timestamp", ">=", oneWeekAgo.toISOString())
+      .get();
+    let weeklyTrades = syndicateSnap.size;
+
+    // Get all appointments in the last week across all clients
+    const appointmentsSnap = await db.collectionGroup("appointments")
+      .where("createdAt", ">=", oneWeekAgo.toISOString())
+      .get();
+    let weeklyRevenue = 0;
+    appointmentsSnap.forEach(doc => {
+      weeklyRevenue += doc.data().value || 150;
+    });
+
+    await db.collection("_metadata").doc("platform_stats").set({
+      weeklyTrades,
+      weeklyRevenue,
+      lastUpdated: new Date().toISOString(),
+      status: "success"
+    }, { merge: true });
+    
+    // Log successful run to the health doc
+    await db.collection("_metadata").doc("platform_stats_health").set({
+      status: "healthy",
+      lastSuccess: new Date().toISOString(),
+      error: null
+    }, { merge: true });
+
+    console.log(`✅ [CRON] Platform Stats Aggregation completed. Trades: ${weeklyTrades}, Revenue: ${weeklyRevenue}`);
+    return res.json({ status: "success", weeklyTrades, weeklyRevenue });
+  } catch (err: any) {
+    console.error("❌ [CRON] Platform Stats Aggregation failed:", err);
+    
+    // Logging service to capture and alert on failures to detect stale data immediately
+    try {
+      await db.collection("_metadata").doc("platform_stats_health").set({
+        status: "failed",
+        lastError: err.message,
+        failedAt: new Date().toISOString()
+      }, { merge: true });
+      
+      const resend = new Resend(process.env.RESEND_API_KEY || "dummy");
+      if (process.env.RESEND_API_KEY) {
+        await resend.emails.send({
+          from: "Main Street OS <alerts@resend.dev>",
+          to: "admin@livingwebsite.com",
+          subject: "🚨 CRON FAILURE: Platform Stats Aggregation",
+          html: `<p>The platform-stats aggregation cron job failed to run.</p><p>Error: ${err.message}</p><p>Stale data risk on Admin Dashboard.</p>`
+        });
+      }
+    } catch (alertErr: any) {
+      console.error("❌ [CRON] Failed to send alert for Platform Stats Aggregation failure:", alertErr.message);
+    }
+    
+    return res.status(500).json({ error: "Aggregation failed.", details: err.message });
+  }
+});
+
 // 3.6. Trigger the Autonomous Meteorological Sync Engine (Cloud Scheduler CRON Entrypoint)
 app.post(
   "/api/pipeline/sync-weather",
@@ -2731,16 +2856,16 @@ function sanitizeBusinessName(name: string): string {
   }
   // 2. Case-Insensitive Prompt Injection Term Mitigation
   const blacklistedKeywords = [
-    /ignore\s+all/gi,
-    /ignore\s+previous/gi,
-    /system\s+instruction/gi,
-    /system\s+prompt/gi,
-    /developer\s+directive/gi,
-    /you\s+are/gi,
+    /ignore\\s+all/gi,
+    /ignore\\s+previous/gi,
+    /system\\s+instruction/gi,
+    /system\\s+prompt/gi,
+    /developer\\s+directive/gi,
+    /you\\s+are/gi,
     /overwrite/gi,
     /override/gi,
-    /delete\s+all/gi,
-    /drop\s+table/gi,
+    /delete\\s+all/gi,
+    /drop\\s+table/gi,
     /eval\(/gi,
     /function\(/gi,
   ];
@@ -2748,9 +2873,9 @@ function sanitizeBusinessName(name: string): string {
     cleaned = cleaned.replace(regex, "");
   }
   // 3. Strict Character Whitelist: Letters, numbers, spaces, and safe punctuation (&, ., ,, -, ', !, ?, #)
-  cleaned = cleaned.replace(/[^a-zA-Z0-9\s&.,\-'\!\?#]/g, "");
+  cleaned = cleaned.replace(/[^a-zA-Z0-9\\s&.,\-\'!?#]/g, "");
   // Reclean spaces and trim
-  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  cleaned = cleaned.replace(/\\s+/g, " ").trim();
   if (cleaned.length < 2) {
     return "Standard Enterprise Merchant";
   }
@@ -2844,8 +2969,8 @@ function generateTenantDomain(businessName: string): string {
   const slug = businessName
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9\s-]/g, "") // remove special chars
-    .replace(/\s+/g, "") // remove spaces
+    .replace(/[^a-z0-9\\s-]/g, "") // remove special chars
+    .replace(/\\s+/g, "") // remove spaces
     .replace(/-+/g, ""); // remove hyphens
   return `${slug}.livingwebsiteos.com`;
 }
@@ -3600,6 +3725,24 @@ async function checkIdempotencyLock(
     return { shouldIgnore: false };
   }
 }
+// TEST REGISTRATION ENDPOINT
+app.post("/api/webhooks/test-register", async (req, res) => {
+  try {
+      const transmissionId = "test-" + Date.now();
+      const queueDispatch = await enqueueProvisioningTask({
+        transmissionId,
+        event: { event_type: "CHECKOUT.ORDER.APPROVED" },
+        businessName: req.body.businessName || "",
+        zipCode: req.body.zipCode ||req.body.zipCode,
+        tier: "ai-adaptive",
+        customerEmail: req.body.customerEmail || "test@example.com",
+      });
+      res.json({ status: "success", queueDispatch });
+  } catch(e) {
+      res.status(500).json({ error: e.message });
+  }
+});
+
 // 8. Live PayPal Webhook Integration for Automated SaaS Client Onboarding
 app.post(
   "/api/webhooks/paypal",
@@ -3739,14 +3882,14 @@ app.post(
               zipCode = parts[1].trim();
             } else {
               businessName = customIdStr.trim();
-              zipCode = "75201";
+              zipCode =req.body.zipCode;
             }
           }
         }
         if (!businessName) {
           const randomId = Math.floor(1000 + Math.random() * 9000);
           businessName = `PayPal Franchise #${randomId}`;
-          zipCode = "75201";
+          zipCode =req.body.zipCode;
         }
         const customerEmail =
           resource.subscriber?.email_address ||
@@ -3920,14 +4063,14 @@ if (process.env.NODE_ENV !== "production") {
                 zipCode = parts[1].trim();
               } else {
                 businessName = customIdStr.trim();
-                zipCode = "75201";
+                zipCode =req.body.zipCode;
               }
             }
           }
           if (!businessName) {
             const randomId = Math.floor(1000 + Math.random() * 9000);
             businessName = `Mock Dev Franchise #${randomId}`;
-            zipCode = "75201";
+            zipCode =req.body.zipCode;
           }
           const customerEmail =
             resource.subscriber?.email_address ||
