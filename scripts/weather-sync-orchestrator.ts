@@ -5,6 +5,17 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { fetchWeatherDataWithFallback } from "../meteorological-sync-engine";
+import * as Sentry from "@sentry/node";
+import { nodeProfilingIntegration } from "@sentry/profiling-node";
+
+Sentry.init({
+  dsn: "https://3c1f0ea8bc5863a12af537980c760142@o4511737188581376.ingest.us.sentry.io/4511737209421826",
+  integrations: [
+    nodeProfilingIntegration(),
+  ],
+  tracesSampleRate: 1.0,
+  profilesSampleRate: 1.0,
+});
 
 dotenv.config();
 
