@@ -1,20 +1,31 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Meteorological Weather Sync Engine
 
-# Run and deploy your AI Studio app
+Meteorological Weather Sync Engine is a multi-tenant application that autonomously orchestrates and syncs real-time extreme meteorological data for a fleet of isolated clients. 
 
-This contains everything you need to run your app locally.
+It queries weather conditions for various geographical zones and dispatches asynchronous tasks (via Firebase and custom worker endpoints) to update client dashboards based on severe weather fluctuations.
 
-View your app in AI Studio: https://ai.studio/apps/f47edfac-93af-42be-be38-3cb2085e5901
+## Features
+- **Multi-Tenant Architecture**: Safely isolates and syncs weather data across various independent clients.
+- **Asynchronous Dispatcher**: Efficient polling-based concurrency engine that respects rate limits without starving the event loop.
+- **Sentry Integrated**: Full observability into backend event-loops, background workers, and frontend UI errors.
 
-## Run Locally
+## Quickstart
 
-**Prerequisites:**  Node.js
-
+**Prerequisites:** Node.js v20+
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+   ```bash
+   npm install
+   ```
+2. Setup environment variables:
+   Configure your environment variables (Firebase, Gemini API, Weather API keys) based on `.env.example`.
+3. Start the application locally:
+   ```bash
+   npm run dev
+   ```
+
+## Sentry Telemetry 👁️
+
+This project utilizes Sentry for full-stack observability:
+- **Backend Orchestrator**: Uses `@sentry/node` and `@sentry/profiling-node` to trace execution time, CPU spikes, and ensure the background worker pool never encounters event-loop starvation.
+- **Frontend**: Uses `@sentry/react` to capture client-side dashboard anomalies and session replays.
