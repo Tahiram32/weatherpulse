@@ -29,3 +29,25 @@ It queries local weather conditions and dispatches background tasks to update cl
 This project utilizes Sentry for full-stack observability:
 - **Backend Orchestrator**: Uses `@sentry/node` and `@sentry/profiling-node` to trace execution time, CPU spikes, and ensure the background worker pool never encounters event-loop starvation.
 - **Frontend**: Uses `@sentry/react` to capture client-side dashboard anomalies and session replays.
+
+## 🤝 Contributing
+Contributions are welcome! Please read `CONTRIBUTING.md` for guidelines on setting up the dev environment, running tests, and submitting pull requests.
+
+This project follows the Contributor Covenant Code of Conduct.
+
+## 📄 License
+This project is licensed under the MIT License — see the LICENSE file for details.
+
+## ❤️ Sponsor This Project
+Weatherpulse is free, open-source software maintained in spare time. Sponsorship directly funds:
+
+- 🛠️ New features — AI Micro-Climate radar, smarter analysis, and deeper integrations
+- 🐛 Bug fixes and maintenance to keep the enterprise tool reliable
+- 📖 Documentation and examples to help more teams adopt it
+- 🌍 Community support — answering issues, reviewing PRs, and growing the ecosystem
+
+If this tool saves your team from a breaking release, consider supporting its development:
+
+→ [Sponsor @Tahiram32 on GitHub](https://github.com/sponsors/Tahiram32)
+
+Every contribution — no matter the size — helps keep this project alive and moving forward. Thank you! 🙏
