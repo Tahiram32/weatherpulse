@@ -5,6 +5,8 @@
 [![CI Status](https://github.com/Tahiram32/weatherpulse/actions/workflows/weather-sync.yml/badge.svg)](https://github.com/Tahiram32/weatherpulse/actions)
 [![Sentry](https://img.shields.io/badge/Sentry-Monitoring-362D59?logo=sentry&logoColor=white)](https://sentry.io/)
 
+**An open-source weather intelligence and automation platform for businesses that depend on environmental conditions.**
+
 Weatherpulse is a high-performance **Node.js weather API** and **multi-tenant weather platform** designed to synchronize hyper-local weather data for a fleet of clients. 
 
 Operating as a robust **weather dashboard backend** and **weather alert engine**, it aggregates local weather conditions and dispatches background tasks to update client dashboards based on severe weather fluctuations. Powered by **Firebase weather synchronization**, it provides true **enterprise weather monitoring** at scale.
@@ -56,15 +58,25 @@ This project follows the Contributor Covenant Code of Conduct.
 ## 📄 License
 This project is licensed under the MIT License — see the LICENSE file for details.
 
-## ❤️ Sponsor This Project
-Weatherpulse is free, open-source software maintained in spare time. Sponsorship directly funds:
+## 🗺️ Roadmap
 
-- 🛠️ New features — new language support, smarter analysis, and deeper integrations
-- 🐛 Bug fixes and maintenance to keep the enterprise tool reliable
-- 📖 Documentation and examples to help more teams adopt it
-- 🌍 Community support — answering issues, reviewing PRs, and growing the ecosystem
+✅ **Q1:** Multi-tenant engine, Weather synchronization, Sentry monitoring
+✅ **Q2:** Advanced UI refactor, CI/CD Actions, AI Micro-climate Engine
+⬜ **Q3:** Kubernetes deployment, Additional weather providers, AI anomaly detection
+⬜ **Q4:** Mobile dashboard, Enterprise authentication, IoT Integrations
 
-If this tool saves your team from a breaking release, consider supporting its development:
+## ❤️ Sponsorship Impact
+
+Sponsors help fund:
+
+- ☁️ Cloud infrastructure for public demos
+- 🌩️ More weather provider integrations
+- 📊 Advanced analytics dashboards
+- 🔐 Enterprise security improvements
+- 📚 Production deployment guides
+- 🧪 Automated testing infrastructure
+
+Your sponsorship directly funds features that benefit organizations using weather intelligence infrastructure.
 
 → [Sponsor @Tahiram32 on GitHub](https://github.com/sponsors/Tahiram32)
 
