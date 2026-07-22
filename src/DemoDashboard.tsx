@@ -180,36 +180,36 @@ export default function DemoDashboard() {
                         <MoreVertical className="w-4 h-4 text-slate-500" />
                       </div>
                       <div className="flex justify-between items-center relative z-10">
-                        <span className="px-3 py-1 rounded-full bg-yellow-500/10 text-yellow-500 text-xs border border-yellow-500/20">Warning</span>
-                        <span className="text-red-400 text-xs font-medium">3 Alerts</span>
-                      </div>
-                    </div>
-                    {/* Tenant Card */}
-                    <div className="bg-[#161920] p-4 rounded-xl border border-cyan-500/30 relative overflow-hidden">
-                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyan-500" />
-                      <div className="flex justify-between items-start mb-4 relative z-10">
-                        <span className="text-white font-medium">Secure Transport</span>
-                        <MoreVertical className="w-4 h-4 text-slate-500" />
-                      </div>
-                      <div className="flex justify-between items-center relative z-10">
-                        <span className="px-3 py-1 rounded-full bg-green-500/10 text-green-500 text-xs border border-green-500/20">Active</span>
-                        <span className="text-red-400 text-xs font-medium">1 Alert</span>
-                      </div>
-                    </div>
+                    <span className="px-3 py-1 rounded-full bg-yellow-500/10 text-yellow-500 text-xs border border-yellow-500/20">Warning</span>
+                    <span className="text-red-400 text-xs font-medium">3 Alerts</span>
                   </div>
-                  
-                  {/* Pagination / Controls */}
-                  <div className="flex items-center justify-between mt-4">
-                    <button className="w-8 h-8 rounded-lg bg-[#161920] border border-white/5 flex items-center justify-center text-slate-400 hover:text-white">
-                      <ChevronLeft className="w-4 h-4" />
-                    </button>
-                    <div className="px-4 py-1.5 rounded-full bg-[#161920] border border-white/5 text-xs text-slate-400">
-                      Scrollable
-                    </div>
-                    <button className="w-8 h-8 rounded-lg bg-[#161920] border border-white/5 flex items-center justify-center text-slate-400 hover:text-white">
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
+                </div>
+                {/* Tenant Card */}
+                <div className="bg-[#161920] p-4 rounded-xl border border-cyan-500/30 relative overflow-hidden">
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyan-500" />
+                  <div className="flex justify-between items-start mb-4 relative z-10">
+                    <span className="text-white font-medium">Secure Transport</span>
+                    <MoreVertical className="w-4 h-4 text-slate-500" />
                   </div>
+                  <div className="flex justify-between items-center relative z-10">
+                    <span className="px-3 py-1 rounded-full bg-green-500/10 text-green-500 text-xs border border-green-500/20">Active</span>
+                    <span className="text-red-400 text-xs font-medium">1 Alert</span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Pagination / Controls */}
+              <div className="flex items-center justify-between mt-4">
+                <button className="w-8 h-8 rounded-lg bg-[#161920] border border-white/5 flex items-center justify-center text-slate-400 hover:text-white">
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <div className="px-4 py-1.5 rounded-full bg-[#161920] border border-white/5 text-xs text-slate-400">
+                  Scollable
+                </div>
+                <button className="w-8 h-8 rounded-lg bg-[#161920] border border-white/5 flex items-center justify-center text-slate-400 hover:text-white">
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
                 </div>
 
                 {/* Active Weather Map */}
@@ -266,7 +266,7 @@ export default function DemoDashboard() {
 
                   <div className="text-center relative z-10 flex-1 flex flex-col">
                     <h2 className="text-[1.3rem] font-bold text-white mb-2 leading-tight">
-                      Extreme Weather<br/>
+                      <span className="text-cyan-400">Exteme Weather</span><br/>
                       Detected: <span className="text-red-500">1.5x<br/>Surge Pricing</span><br/>
                       Activated
                     </h2>
@@ -277,7 +277,7 @@ export default function DemoDashboard() {
                         <CloudLightning className="w-16 h-16 text-cyan-400 drop-shadow-[0_0_15px_rgba(34,211,238,0.5)]" strokeWidth={1.5} />
                         <Zap className="absolute bottom-1 right-2 w-8 h-8 text-red-500 drop-shadow-[0_0_15px_rgba(239,68,68,0.8)] animate-pulse" />
                       </div>
-                      <div className="text-slate-300 font-mono tracking-widest">{currentTime.toLocaleTimeString('en-US', { hour12: false })}</div>
+                      <div className="text-slate-300 font-mono tracking-widest">14:32:01</div>
                     </div>
                     
                     <div className="text-left text-sm space-y-1 mt-2">
@@ -294,9 +294,9 @@ export default function DemoDashboard() {
                       <ChevronDown className="w-4 h-4 text-slate-500 rotate-180" />
                     </div>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Extreme Weather Detected:<br/>
-                      Event: Severe Thunderstorm<br/>
-                      SE USA, Event: Severe Thunderstorms & Surge Applied to 3 Clients.
+                      WeatherWeather Detected:<br/>
+                      Event: Severe Thuneration<br/>
+                      SE USA, Event: Severe Thunderstorms & Surge Applied to 3 Cllents.
                     </p>
                   </div>
                 </div>
