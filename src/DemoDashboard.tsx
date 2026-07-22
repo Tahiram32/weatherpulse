@@ -58,8 +58,8 @@ export default function DemoDashboard() {
         // Minor fluctuations
         setTenants(prev => prev.map(t => ({
           ...t,
-          temp: t.temp + (Math.random() > 0.5 ? 1 : -1),
-          aqi: Math.max(0, t.aqi + (Math.random() > 0.5 ? 2 : -2))
+          temp: Math.max(40, Math.min(115, t.temp + (Math.random() > 0.5 ? 1 : -1))),
+          aqi: Math.max(10, Math.min(150, t.aqi + (Math.random() > 0.5 ? 2 : -2)))
         })));
       }
     }, 2500);
