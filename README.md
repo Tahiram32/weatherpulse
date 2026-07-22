@@ -4,7 +4,7 @@
 
 Weatherpulse helps developers build weather-aware applications by synchronizing weather data, managing background jobs, and delivering event-driven alerts across multiple clients.
 
-[Live Demo](http://localhost:3000) • [Documentation](docs/getting-started.md) • [Report Bug](https://github.com/Tahiram32/weatherpulse/issues) • [GitHub Sponsors](https://github.com/sponsors/Tahiram32)
+[Live Demo](https://weatherpulse-gray.vercel.app/) • [Documentation](docs/getting-started.md) • [Report Bug](https://github.com/Tahiram32/weatherpulse/issues) • [GitHub Sponsors](https://github.com/sponsors/Tahiram32)
 
 ---
 
