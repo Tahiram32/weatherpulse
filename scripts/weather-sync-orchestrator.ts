@@ -47,20 +47,7 @@ if (serviceAccountKey && serviceAccountKey.trim() !== "") {
   try {
     let cleanedKey = serviceAccountKey.trim();
     const firstBrace = cleanedKey.indexOf('{');
-    
-    // Instead of lastIndexOf, find the EXACT matching closing brace for the first brace.
-    let lastBrace = -1;
-    let depth = 0;
-    for (let i = firstBrace; i < cleanedKey.length; i++) {
-      if (cleanedKey[i] === '{') depth++;
-      else if (cleanedKey[i] === '}') {
-        depth--;
-        if (depth === 0) {
-          lastBrace = i;
-          break;
-        }
-      }
-    }
+    const lastBrace = cleanedKey.lastIndexOf('}');
     
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
       cleanedKey = cleanedKey.substring(firstBrace, lastBrace + 1);

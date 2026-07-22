@@ -100,7 +100,14 @@ if (isProduction) {
   const serviceAccountKey = process.env.FIREBASE_SERVICE_ACCOUNT_KEY;
   if (serviceAccountKey && serviceAccountKey.trim() !== "") {
     try {
-      const serviceAccount = JSON.parse(serviceAccountKey);
+      let cleanedKey = serviceAccountKey.trim();
+      const firstBrace = cleanedKey.indexOf('{');
+      const lastBrace = cleanedKey.lastIndexOf('}');
+      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
+        cleanedKey = cleanedKey.substring(firstBrace, lastBrace + 1);
+      }
+      
+      const serviceAccount = JSON.parse(cleanedKey);
       if (serviceAccount.private_key) {
         serviceAccount.private_key = serviceAccount.private_key.replace(/\\n/g, '\n');
       }
