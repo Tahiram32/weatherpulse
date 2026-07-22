@@ -5,6 +5,7 @@ import * as Sentry from "@sentry/react";
 import AdminDashboard from './AdminDashboard.tsx';
 import Storefront from './Storefront.tsx';
 import CancelArticles from './CancelArticles.tsx';
+import DemoDashboard from './DemoDashboard.tsx';
 import './index.css';
 
 Sentry.init({
@@ -23,6 +24,7 @@ createRoot(document.getElementById('root')!).render(
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Storefront />} />
+        <Route path="/demo" element={<DemoDashboard />} />
         <Route path="/internal-fleet-admin" element={<AdminDashboard />} />
         <Route path="/cancel-articles/:domain" element={<CancelArticles />} />
       </Routes>
